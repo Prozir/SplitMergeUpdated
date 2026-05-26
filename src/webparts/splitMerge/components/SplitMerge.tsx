@@ -1,0 +1,864 @@
+import * as React from 'react';
+import styles from './SplitMerge.module.scss';
+import type { ISplitMergeProps } from './ISplitMergeProps';
+import { SPHttpClient } from '@microsoft/sp-http';
+import { PrimaryButton, TextField, Checkbox, Label, Spinner, SpinnerSize, DetailsList, IColumn, SelectionMode, Modal, IconButton, Link, Dropdown, IDropdownOption } from '@fluentui/react';
+import * as pdfjsLib from 'pdfjs-dist';
+import { PDFDocument } from 'pdf-lib';
+
+// Set PDF.js worker to use local worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.min.js');
+
+interface IPageInfo {
+  pageNumber: number;
+  selected: boolean;
+  thumbnail?: string;
+}
+
+export default class SplitMerge extends React.Component<ISplitMergeProps, {
+  pdfFiles: any[];
+  selectedPdf: string;
+  selectedPdfName: string;
+  pages: IPageInfo[];
+  currentPageNumber: number;
+  loading: boolean;
+  newContractNumber: string;
+  newDocumentType: string;
+  uploading: boolean;
+  uploadingSource: boolean;
+  errorMessage: string;
+  showModal: boolean;
+  documentTypes: IDropdownOption[];
+  loadingDocumentTypes: boolean;
+  entityOptions: IDropdownOption[];
+  loadingEntities: boolean;
+  selectedEntityKey: string;
+  selectedEntitySiteUrl: string;
+}> {
+  private pdfDocument: any = null;
+  private previewCanvasRef = React.createRef<HTMLCanvasElement>();
+  private fileInputRef = React.createRef<HTMLInputElement>();
+
+  constructor(props: ISplitMergeProps) {
+    super(props);
+    this.state = {
+      pdfFiles: [],
+      selectedPdf: '',
+      selectedPdfName: '',
+      pages: [],
+      currentPageNumber: 1,
+      loading: false,
+      newContractNumber: '',
+      newDocumentType: '',
+      uploading: false,
+      uploadingSource: false,
+      errorMessage: '',
+      showModal: false,
+      documentTypes: [],
+      loadingDocumentTypes: false,
+      entityOptions: [],
+      loadingEntities: false,
+      selectedEntityKey: '',
+      selectedEntitySiteUrl: ''
+    };
+  }
+
+  componentDidMount() {
+    this.initializePdfJs();
+    this.loadPdfFiles();
+    this.loadDocumentTypes();
+    this.loadEntityOptions();
+  }
+
+  private async initializePdfJs() {
+    try {
+      // PDF.js worker is configured at module load; nothing to initialize here
+    } catch (error) {
+      this.setState({ errorMessage: 'PDF.js library failed to initialize. Please refresh the page.' });
+    }
+  }
+
+  componentDidUpdate(prevProps: ISplitMergeProps, prevState: Readonly<any>) {
+    if (prevProps.sourceLibraryTitle !== this.props.sourceLibraryTitle) {
+      this.setState({ pdfFiles: [], selectedPdf: '', selectedPdfName: '', pages: [], errorMessage: '', showModal: false });
+      this.loadPdfFiles();
+    }
+
+    if (prevProps.documentTypeConfigListTitle !== this.props.documentTypeConfigListTitle) {
+      this.loadDocumentTypes();
+    }
+
+    if (!prevState.showModal && this.state.showModal && this.pdfDocument) {
+      if (this.state.documentTypes.length === 0) {
+        this.loadDocumentTypes();
+      }
+      requestAnimationFrame(() => {
+        this.renderPdfPage(this.state.currentPageNumber).catch(error => {
+          console.error('Error rendering PDF page after modal open:', error);
+        });
+      });
+    }
+  }
+
+  private async loadPdfFiles() {
+    const { sourceLibraryTitle, context } = this.props;
+    if (!sourceLibraryTitle) return;
+
+    try {
+      const response = await context.spHttpClient.get(
+        `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${sourceLibraryTitle}')/items?$filter=substringof('.pdf',FileLeafRef)&$select=FileLeafRef,FileRef,Created,Modified,Author/Title,AssignedTo/Title,AssignedTo/EMail&$expand=Author,AssignedTo`,
+        SPHttpClient.configurations.v1
+      );
+      const data = await response.json();
+      const currentUserEmail = context.pageContext.user.email?.toLowerCase();
+      const filteredFiles = data.value.filter((file: any) => {
+        const assigned = file.AssignedTo;
+        if (!assigned) {
+          return true;
+        }
+
+        const users = Array.isArray(assigned) ? assigned : [assigned];
+        const assignedEmails: string[] = users
+          .map((user: any) => user?.EMail?.toLowerCase())
+          .filter((email: string) => !!email) as string[];
+
+        if (assignedEmails.length > 0) {
+          return currentUserEmail ? assignedEmails.indexOf(currentUserEmail) > -1 : false;
+        }
+
+        const assignedTitles: string[] = users
+          .map((user: any) => user?.Title)
+          .filter((title: string) => !!title) as string[];
+
+        return currentUserEmail ? assignedTitles.indexOf(context.pageContext.user.displayName) > -1 : false;
+      });
+
+      this.setState({ pdfFiles: filteredFiles, errorMessage: '' });
+    } catch (error) {
+      console.error('Error loading PDF files:', error);
+      this.setState({ errorMessage: 'Error loading PDF files. Please check the library title and permissions.' });
+    }
+  }
+
+  private async loadPdf(fileUrl: string, fileName: string) {
+    this.setState({ loading: true, pages: [], errorMessage: '' });
+    try {
+      
+
+      // First, try to get the file to check if it's accessible
+      const response = await this.props.context.spHttpClient.get(fileUrl, SPHttpClient.configurations.v1);
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      // PDF file loaded into memory
+
+      if (arrayBuffer.byteLength === 0) {
+        throw new Error('PDF file is empty');
+      }
+
+      // Check if the response is actually a PDF
+      const uint8Array = new Uint8Array(arrayBuffer);
+      if (uint8Array.length < 4 ||
+          uint8Array[0] !== 37 || uint8Array[1] !== 80 || uint8Array[2] !== 68 || uint8Array[3] !== 70) {
+        throw new Error('File is not a valid PDF');
+      }
+
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      // PDF loaded successfully
+
+      this.pdfDocument = pdf;
+      const pages: IPageInfo[] = [];
+
+      for (let i = 1; i <= pdf.numPages; i++) {
+        pages.push({
+          pageNumber: i,
+          selected: false
+        });
+      }
+
+      this.setState({ pages, loading: false, selectedPdf: fileUrl, selectedPdfName: fileName, currentPageNumber: 1, showModal: true });
+    } catch (error) {
+      console.error('Error loading PDF:', error);
+      let errorMessage = 'Error loading PDF. ';
+
+      if (error instanceof Error) {
+        if (error.message.indexOf('HTTP') !== -1) {
+          errorMessage += 'File access denied or file not found. Please check permissions and file path.';
+        } else if (error.message.indexOf('empty') !== -1) {
+          errorMessage += 'The PDF file appears to be empty.';
+        } else if (error.message.indexOf('valid PDF') !== -1) {
+          errorMessage += 'The file is not a valid PDF document.';
+        } else if (error.message.indexOf('InvalidPDFException') !== -1) {
+          errorMessage += 'The PDF file is corrupted or invalid.';
+        } else if (error.message.indexOf('MissingPDFException') !== -1) {
+          errorMessage += 'PDF file not found or inaccessible.';
+        } else {
+          errorMessage += error.message;
+        }
+      } else {
+        errorMessage += 'Please check file permissions and try again.';
+      }
+
+      this.setState({ loading: false, errorMessage });
+    }
+  }
+
+  private async loadDocumentTypes() {
+    const { documentTypeConfigListTitle, context } = this.props;
+    if (!documentTypeConfigListTitle) {
+      this.setState({ documentTypes: [], loadingDocumentTypes: false });
+      return;
+    }
+
+    this.setState({ loadingDocumentTypes: true });
+
+    try {
+      // First, fetch all items to inspect the structure and actual column names
+      const response = await context.spHttpClient.get(
+        `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(documentTypeConfigListTitle)}')/items?$top=1000`,
+        SPHttpClient.configurations.v1
+      );
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+
+      // Filter for active items (handle various possible column names and value formats)
+      const options: IDropdownOption[] = data.value
+        .filter((item: any) => {
+          // Check multiple possible column names for Yes/No field
+          const isActive = item.IsActive || item.IsActive_x0020_Status || item.IsActiveStatus;
+          // For Yes/No columns, true means yes, false means no
+          return isActive === true || isActive === 1 || isActive === 'Yes' || isActive === 'true';
+        })
+        .map((item: any) => {
+          // Try multiple possible column names for document type
+          const docType = item.Title || item.DocumentType || item.Document_x0020_Type || item['Document Type'];
+          return {
+            key: docType,
+            text: docType
+          };
+        })
+        .sort((a: IDropdownOption, b: IDropdownOption) => 
+          (a.text as string).localeCompare(b.text as string)
+        );
+
+      this.setState({ documentTypes: options, loadingDocumentTypes: false });
+    } catch (error) {
+      console.error('Error loading document types:', error);
+      this.setState({ documentTypes: [], loadingDocumentTypes: false });
+    }
+  }
+
+  private safeODataString(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
+  private async loadEntityOptions() {
+    const { context } = this.props;
+    const listTitle = 'EntityDocumentRepositoryConfig';
+    this.setState({ loadingEntities: true });
+
+    try {
+      const response = await context.spHttpClient.get(
+        `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(listTitle)}')/items?$select=Entity,CMSSiteURL&$filter=CMSSiteURL ne null and CMSSiteURL ne ''&$top=500`,
+        SPHttpClient.configurations.v1
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to load entity config list: ${response.status} ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      const seenEntities = new Set<string>();
+      const options: IDropdownOption[] = (data.value as any[])
+        .filter((item: any) => item.Entity && item.CMSSiteURL && item.CMSSiteURL.toString().trim() !== '')
+        .map((item: any) => ({
+          key: item.Entity,
+          text: item.Entity,
+          data: item.CMSSiteURL.toString().trim()
+        }))
+        .filter(option => {
+          const key = option.key as string;
+          if (seenEntities.has(key)) {
+            return false;
+          }
+          seenEntities.add(key);
+          return true;
+        });
+
+      this.setState({ entityOptions: options, loadingEntities: false });
+    } catch (error) {
+      console.error('Error loading entity options:', error);
+      this.setState({ entityOptions: [], loadingEntities: false });
+    }
+  }
+
+  private getServerRelativeUrl(url: string): string {
+    if (!url) {
+      return url;
+    }
+
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return parsed.pathname.replace(/\/$/, '');
+    } catch {
+      return url.replace(/\/$/, '');
+    }
+  }
+
+  private getAbsoluteSiteUrl(url: string): string {
+    if (!url) {
+      return '';
+    }
+
+    try {
+      const parsed = new URL(url, window.location.origin);
+      return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/$/, '');
+    } catch {
+      return url.replace(/\/$/, '');
+    }
+  }
+
+  private async getRepositoryFolderUrl(siteUrl: string, repositoryName: string, documentSetName: string): Promise<{ siteApiBase: string; folderUrl: string } | null> {
+    const serverRelativeSiteUrl = this.getServerRelativeUrl(siteUrl).replace(/\/$/, '');
+    const siteApiBase = this.getAbsoluteSiteUrl(siteUrl);
+    const safeRepositoryName = repositoryName.trim().replace(/^\/+|\/+$/g, '');
+    const safeDocumentSetName = documentSetName.trim();
+
+    if (!siteApiBase || !serverRelativeSiteUrl || !safeRepositoryName || !safeDocumentSetName) {
+      console.error('Invalid repository target values', { siteUrl, siteApiBase, serverRelativeSiteUrl, repositoryName, documentSetName });
+      return null;
+    }
+
+    const folderUrl = `${serverRelativeSiteUrl}/${safeRepositoryName}/${safeDocumentSetName}`;
+    const safeFolderUrl = folderUrl.replace(/'/g, "''");
+
+    // checking repository folder on target site
+
+    const response = await this.props.context.spHttpClient.get(
+      `${siteApiBase}/_api/web/GetFolderByServerRelativeUrl('${safeFolderUrl}')`,
+      SPHttpClient.configurations.v1
+    );
+
+    if (!response.ok) {
+      console.warn('Target folder not found', { siteApiBase, folderUrl, status: response.status, statusText: response.statusText });
+      return null;
+    }
+
+    return { siteApiBase, folderUrl };
+  }
+
+  private async checkInFile(serverRelativeUrl: string, siteApiBase: string): Promise<void> {
+    const fileUrlEncoded = encodeURIComponent(serverRelativeUrl);
+    const checkInUrl = `${siteApiBase}/_api/web/GetFileByServerRelativeUrl('${fileUrlEncoded}')/CheckIn(comment='Uploaded by SplitMerge',checkintype=0)`;
+
+    const response = await this.props.context.spHttpClient.post(checkInUrl, SPHttpClient.configurations.v1, {
+      headers: {
+        'Accept': 'application/json;odata=nometadata'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`File check-in failed: ${response.status} ${response.statusText}`);
+    }
+  }
+
+  private handleModalClose = () => {
+    this.pdfDocument = null;
+    this.setState({ showModal: false, pages: [], selectedPdf: '', selectedPdfName: '', currentPageNumber: 1 });
+  };
+
+  private handlePdfSelect = (fileRef: string, fileName: string) => {
+    this.loadPdf(fileRef, fileName);
+  };
+
+  private handleUploadButtonClick = () => {
+    if (this.fileInputRef.current) {
+      this.fileInputRef.current.value = '';
+      this.fileInputRef.current.click();
+    }
+  };
+
+  private handleFileInputChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const { sourceLibraryTitle, context } = this.props;
+    const file = event.target.files && event.target.files[0];
+
+    if (!file || !sourceLibraryTitle) {
+      return;
+    }
+
+    if (file.type !== 'application/pdf') {
+      alert('Please select a PDF file.');
+      return;
+    }
+
+    this.setState({ uploadingSource: true, errorMessage: '' });
+
+    try {
+      const fileName = file.name;
+      const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${sourceLibraryTitle}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
+
+      const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
+        body: file,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Accept': 'application/json;odata=nometadata'
+        }
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error(`File upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+      }
+
+      alert(`Uploaded ${fileName} successfully to ${sourceLibraryTitle}.`);
+      await this.loadPdfFiles();
+    } catch (error) {
+      console.error('Error uploading PDF file:', error);
+      this.setState({ errorMessage: 'Error uploading PDF file. Please try again.' });
+    } finally {
+      this.setState({ uploadingSource: false });
+    }
+  };
+
+  private handlePageSelect = (pageNumber: number, selected: boolean) => {
+    this.setState(prevState => ({
+      pages: prevState.pages.map(page =>
+        page.pageNumber === pageNumber ? { ...page, selected } : page
+      )
+    }));
+  };
+
+  private async renderPdfPage(pageNumber: number) {
+    if (!this.pdfDocument || !this.previewCanvasRef.current) {
+      return;
+    }
+
+    const page = await this.pdfDocument.getPage(pageNumber);
+    const scale = 1.5;
+    const viewport = page.getViewport({ scale });
+
+    const canvas = this.previewCanvasRef.current;
+    const context = canvas.getContext('2d');
+    if (!context) {
+      throw new Error('Failed to get canvas context');
+    }
+
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+
+    await page.render({ canvasContext: context, viewport }).promise;
+  }
+
+  private async handlePageNavigation(pageNumber: number) {
+    if (pageNumber < 1 || pageNumber > this.state.pages.length) {
+      return;
+    }
+
+    this.setState({ currentPageNumber: pageNumber }, () => {
+      this.renderPdfPage(pageNumber);
+    });
+  }
+
+  private handleCollateAndUpload = async () => {
+    const { pages, newContractNumber, newDocumentType, selectedEntityKey, selectedEntitySiteUrl } = this.state;
+    const { destinationLibraryTitle, destinationDocumentRepositoryTitle, sourceLibraryTitle, context } = this.props;
+    const selectedPages = pages.filter(p => p.selected);
+
+    // collate/upload triggered
+
+    if (selectedPages.length === 0 || !newContractNumber || !newDocumentType || !selectedEntityKey) {
+      alert('Please select pages and enter contract number, document type, and entity.');
+      return;
+    }
+
+    if (!destinationLibraryTitle) {
+      alert('Merged library title is not configured. Please set it in the web part properties.');
+      return;
+    }
+
+    if (!destinationDocumentRepositoryTitle) {
+      alert('Destination document repository title is not configured. Please set it in the web part properties.');
+      return;
+    }
+
+    if (!sourceLibraryTitle) {
+      alert('Source library title is not configured. Please set it in the web part properties.');
+      return;
+    }
+
+    if (!selectedEntitySiteUrl) {
+      alert('Selected entity does not have a CMS site URL configured.');
+      return;
+    }
+
+    const repositoryInfo = await this.getRepositoryFolderUrl(selectedEntitySiteUrl, destinationDocumentRepositoryTitle, newContractNumber);
+    if (!repositoryInfo) {
+      alert(`Contract Number '${newContractNumber}' was not found in the selected entity repository '${destinationDocumentRepositoryTitle}'.`);
+      return;
+    }
+
+    this.setState({ uploading: true });
+
+    try {
+      // Load the original PDF
+      const response = await context.spHttpClient.get(this.state.selectedPdf, SPHttpClient.configurations.v1);
+      const arrayBuffer = await response.arrayBuffer();
+      const originalPdf = await PDFDocument.load(arrayBuffer);
+
+      // Create new PDF with selected pages for destination
+      const newPdf = await PDFDocument.create();
+      for (const pageInfo of selectedPages) {
+        const [copiedPage] = await newPdf.copyPages(originalPdf, [pageInfo.pageNumber - 1]);
+        newPdf.addPage(copiedPage);
+      }
+
+      const pdfBytes = await newPdf.save();
+
+      // Upload merged file to destination library
+      const fileName = `Merged_${newContractNumber}_${newDocumentType}.pdf`;
+      const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(destinationLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
+
+      const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
+        body: pdfBytes,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Accept': 'application/json;odata=nometadata'
+        }
+      });
+
+      if (!uploadResponse.ok) {
+        throw new Error(`File upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+      }
+
+      const uploadResult = await uploadResponse.json();
+      const serverRelativeUrl = uploadResult?.ServerRelativeUrl || uploadResult?.ServerRelativeUrlRaw || '';
+
+      if (!serverRelativeUrl) {
+        throw new Error('Uploaded file response did not include ServerRelativeUrl. Cannot update metadata.');
+      }
+
+      const fileUrlEncoded = encodeURIComponent(serverRelativeUrl);
+      const metadataUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${fileUrlEncoded}')/ListItemAllFields`;
+
+      const metadataResponse = await context.spHttpClient.post(metadataUrl, SPHttpClient.configurations.v1, {
+        headers: {
+          'Content-Type': 'application/json;odata=nometadata',
+          'Accept': 'application/json;odata=nometadata',
+          'IF-MATCH': '*',
+          'X-HTTP-Method': 'MERGE'
+        },
+        body: JSON.stringify({
+          ContractNo: newContractNumber,
+          DocumentType: newDocumentType
+        })
+      });
+
+      if (!metadataResponse.ok) {
+        throw new Error(`Metadata update failed: ${metadataResponse.status} ${metadataResponse.statusText}`);
+      }
+
+      const documentRepositoryUploadUrl = `${repositoryInfo.siteApiBase}/_api/web/GetFolderByServerRelativeUrl('${repositoryInfo.folderUrl.replace(/'/g, "''")}')/Files/add(url='${this.safeODataString(fileName)}',overwrite=true)`;
+      const documentRepositoryUploadResponse = await context.spHttpClient.post(documentRepositoryUploadUrl, SPHttpClient.configurations.v1, {
+        body: pdfBytes,
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Accept': 'application/json;odata=nometadata'
+        }
+      });
+
+      if (!documentRepositoryUploadResponse.ok) {
+        throw new Error(`Document repository upload failed: ${documentRepositoryUploadResponse.status} ${documentRepositoryUploadResponse.statusText}`);
+      }
+
+      const documentRepositoryUploadResult = await documentRepositoryUploadResponse.json();
+      const documentRepositoryServerRelativeUrl = documentRepositoryUploadResult?.ServerRelativeUrl || `${repositoryInfo.folderUrl}/${fileName}`;
+      const repositoryFileUrlEncoded = encodeURIComponent(documentRepositoryServerRelativeUrl);
+      const repositoryMetadataUrl = `${repositoryInfo.siteApiBase}/_api/web/GetFileByServerRelativeUrl('${repositoryFileUrlEncoded}')/ListItemAllFields`;
+
+      const repositoryMetadataResponse = await context.spHttpClient.post(repositoryMetadataUrl, SPHttpClient.configurations.v1, {
+        headers: {
+          'Content-Type': 'application/json;odata=nometadata',
+          'Accept': 'application/json;odata=nometadata',
+          'IF-MATCH': '*',
+          'X-HTTP-Method': 'MERGE'
+        },
+        body: JSON.stringify({
+          DocumentNumber: newContractNumber,
+          DocumentType: newDocumentType
+        })
+      });
+
+      if (!repositoryMetadataResponse.ok) {
+        throw new Error(`Document repository metadata update failed: ${repositoryMetadataResponse.status} ${repositoryMetadataResponse.statusText}`);
+      }
+
+      await this.checkInFile(documentRepositoryServerRelativeUrl, repositoryInfo.siteApiBase);
+
+      const currentUserId = context.pageContext.legacyPageContext?.userId;
+      if (!currentUserId) {
+        throw new Error('Unable to determine the current user ID for AssignedTo update.');
+      }
+
+      const sourceFileUrlEncoded = encodeURIComponent(this.state.selectedPdf);
+      const sourceMetadataUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${sourceFileUrlEncoded}')/ListItemAllFields`;
+
+      const sourceMetadataResponse = await context.spHttpClient.post(sourceMetadataUrl, SPHttpClient.configurations.v1, {
+        headers: {
+          'Content-Type': 'application/json;odata=nometadata',
+          'Accept': 'application/json;odata=nometadata',
+          'IF-MATCH': '*',
+          'X-HTTP-Method': 'MERGE'
+        },
+        body: JSON.stringify({
+          AssignedToId: currentUserId
+        })
+      });
+
+      if (!sourceMetadataResponse.ok) {
+        throw new Error(`Source file assignment update failed: ${sourceMetadataResponse.status} ${sourceMetadataResponse.statusText}`);
+      }
+
+      const remainingPages = pages.filter(p => !p.selected);
+      if (remainingPages.length === 0) {
+        const deleteUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(this.state.selectedPdf)}')`;
+        const deleteResponse = await context.spHttpClient.post(deleteUrl, SPHttpClient.configurations.v1, {
+          headers: {
+            'IF-MATCH': '*',
+            'X-HTTP-Method': 'DELETE'
+          }
+        });
+
+        if (!deleteResponse.ok) {
+          throw new Error(`Source file delete failed: ${deleteResponse.status} ${deleteResponse.statusText}`);
+        }
+      } else {
+        const remainingPdf = await PDFDocument.create();
+        for (const pageInfo of remainingPages) {
+          const [copiedPage] = await remainingPdf.copyPages(originalPdf, [pageInfo.pageNumber - 1]);
+          remainingPdf.addPage(copiedPage);
+        }
+
+        const remainingBytes = await remainingPdf.save();
+        const sourceUploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${sourceLibraryTitle}')/RootFolder/Files/add(url='${encodeURIComponent(this.state.selectedPdfName)}',overwrite=true)`;
+
+        const overwriteResponse = await context.spHttpClient.post(sourceUploadUrl, SPHttpClient.configurations.v1, {
+          body: remainingBytes,
+          headers: {
+            'Content-Type': 'application/pdf',
+            'Accept': 'application/json;odata=nometadata'
+          }
+        });
+
+        if (!overwriteResponse.ok) {
+          throw new Error(`Source file overwrite failed: ${overwriteResponse.status} ${overwriteResponse.statusText}`);
+        }
+      }
+
+      alert('PDF collated and uploaded successfully.');
+      await this.loadPdfFiles();
+      this.setState({ uploading: false, pages: [], selectedPdf: '', selectedPdfName: '', showModal: false, newContractNumber: '', newDocumentType: '', errorMessage: '' });
+    } catch (error) {
+      console.error('Error collating, uploading, or updating source PDF:', error);
+      alert('Error occurred. Please try again.');
+      this.setState({ uploading: false });
+    }
+  }
+
+  public render(): React.ReactElement<ISplitMergeProps> {
+    const { pdfFiles, pages, loading, newContractNumber, newDocumentType, uploading, uploadingSource, errorMessage, entityOptions, loadingEntities, selectedEntityKey } = this.state;
+
+    const columns: IColumn[] = [
+      {
+        key: 'fileName',
+        name: 'File Name',
+        fieldName: 'fileName',
+        minWidth: 200,
+        maxWidth: 300,
+        onRender: (item) => (
+          <Link
+            onClick={(event) => {
+              event.preventDefault();
+              this.handlePdfSelect(item.fileRef, item.fileName);
+            }}
+            disabled={loading}
+          >
+            {item.fileName}
+          </Link>
+        )
+      },
+      {
+        key: 'created',
+        name: 'Created',
+        fieldName: 'created',
+        minWidth: 150,
+        maxWidth: 200
+      },
+      {
+        key: 'modified',
+        name: 'Modified',
+        fieldName: 'modified',
+        minWidth: 150,
+        maxWidth: 200
+      },
+      {
+        key: 'author',
+        name: 'Author',
+        fieldName: 'author',
+        minWidth: 100,
+        maxWidth: 150
+      },
+      {
+        key: 'assignedTo',
+        name: 'Assigned To',
+        fieldName: 'assignedTo',
+        minWidth: 150,
+        maxWidth: 200
+      }
+    ];
+
+    const items = pdfFiles.map(file => ({
+      fileName: file.FileLeafRef,
+      fileRef: file.FileRef,
+      created: new Date(file.Created).toLocaleString(),
+      modified: new Date(file.Modified).toLocaleString(),
+      author: file.Author?.Title || 'Unknown',
+      assignedTo: file.AssignedTo?.Title || 'Unassigned'
+    }));
+
+    return (
+      <section className={`${styles.splitMerge} ${this.props.hasTeamsContext ? styles.teams : ''}`}>
+        <div>
+          {this.props.title && <h3>{this.props.title}</h3>}
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <PrimaryButton
+              text="Upload New PDF"
+              onClick={this.handleUploadButtonClick}
+              disabled={!this.props.sourceLibraryTitle || uploadingSource}
+            />
+            <input
+              ref={this.fileInputRef}
+              type="file"
+              accept="application/pdf"
+              style={{ display: 'none' }}
+              onChange={this.handleFileInputChange}
+            />
+            {uploadingSource && <Spinner size={SpinnerSize.small} label="Uploading PDF..." />}
+          </div>
+          <div>
+            {errorMessage && <div style={{ color: 'red' }}>{errorMessage}</div>}
+            {pdfFiles.length === 0 && !errorMessage ? (
+              <p>No PDF files found or library not specified.</p>
+            ) : (
+              <DetailsList
+                items={items}
+                columns={columns}
+                selectionMode={SelectionMode.multiple}
+                setKey="pdfFiles"
+              />
+            )}
+          </div>
+          {loading && <Spinner size={SpinnerSize.medium} label="Loading PDF..." />}
+        </div>
+
+        <Modal
+          isOpen={this.state.showModal}
+          onDismiss={this.handleModalClose}
+          isBlocking={false}
+          containerClassName={styles.modalContainer}
+        >
+          <div className={styles.modalHeader}>
+            <h3>Select Pages from: {this.state.selectedPdfName}</h3>
+            <IconButton
+              iconProps={{ iconName: 'Cancel' }}
+              onClick={this.handleModalClose}
+              title="Close"
+            />
+          </div>
+          <div className={styles.modalBody}>
+            {pages.length > 0 && (
+              <div className={styles.modalContent}>
+                <div className={styles.previewPanel}>
+                  <div className={styles.previewControls}>
+                    <PrimaryButton
+                      text="Previous"
+                      onClick={() => this.handlePageNavigation(this.state.currentPageNumber - 1)}
+                      disabled={this.state.currentPageNumber <= 1}
+                    />
+                    <Label className={styles.currentPageLabel}>
+                      Page {this.state.currentPageNumber} of {pages.length}
+                    </Label>
+                    <PrimaryButton
+                      text="Next"
+                      onClick={() => this.handlePageNavigation(this.state.currentPageNumber + 1)}
+                      disabled={this.state.currentPageNumber >= pages.length}
+                    />
+                  </div>
+                  <div className={styles.previewCanvasWrapper}>
+                    <canvas ref={this.previewCanvasRef} className={styles.previewCanvas} />
+                  </div>
+                </div>
+                <div className={styles.selectionPanel}>
+                  <Label>Page Selection</Label>
+                  <div className={styles.pageSelectionList}>
+                    {pages.map(page => (
+                      <div key={page.pageNumber} className={styles.pageSelectionItem}>
+                        <Checkbox
+                          label={`Page ${page.pageNumber}`}
+                          checked={page.selected}
+                          onChange={(ev, checked) => this.handlePageSelect(page.pageNumber, checked || false)}
+                        />
+                        <PrimaryButton
+                          text="Preview"
+                          onClick={() => this.handlePageNavigation(page.pageNumber)}
+                          disabled={this.state.currentPageNumber === page.pageNumber}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <div className={styles.formSection}>
+                    <TextField
+                      label="Contract Number"
+                      value={newContractNumber}
+                      onChange={(ev, value) => this.setState({ newContractNumber: value || '' })}
+                      required
+                    />
+                    <Dropdown
+                      label="Document Type"
+                      options={this.state.documentTypes}
+                      selectedKey={newDocumentType || undefined}
+                      onChange={(ev, option) => this.setState({ newDocumentType: option?.key as string || '' })}
+                      required
+                      disabled={this.state.loadingDocumentTypes || this.state.documentTypes.length === 0}
+                      placeholder={this.state.loadingDocumentTypes ? "Loading document types..." : "Select a document type"}
+                    />
+                    <Dropdown
+                      label="Entity"
+                      options={entityOptions}
+                      selectedKey={selectedEntityKey || undefined}
+                      onChange={(ev, option) => this.setState({ selectedEntityKey: option?.key as string || '', selectedEntitySiteUrl: option?.data as string || '' })}
+                      required
+                      disabled={loadingEntities || entityOptions.length === 0}
+                      placeholder={loadingEntities ? "Loading entities..." : "Select an entity"}
+                    />
+                    <PrimaryButton
+                      text="Merge and Upload"
+                      onClick={() => this.handleCollateAndUpload()}
+                      disabled={uploading || !newContractNumber || !newDocumentType || !selectedEntityKey || pages.filter(p => p.selected).length === 0}
+                    />
+                    {uploading && <Spinner size={SpinnerSize.small} label="Uploading..." />}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </Modal>
+      </section>
+    );
+  }
+}

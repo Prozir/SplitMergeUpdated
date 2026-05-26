@@ -1,0 +1,156 @@
+@import '~@fluentui/react/dist/sass/References.scss';
+
+.splitMerge {
+  overflow: hidden;
+  padding: 1em;
+  color: "[theme:bodyText, default: #323130]";
+  color: var(--bodyText);
+  &.teams {
+    font-family: $ms-font-family-fallbacks;
+  }
+}
+
+.modalContainer {
+  width: 98vw;
+  max-width: 1600px;
+  height: 90vh;
+  max-height: 1000px;
+  overflow:hidden;
+}
+
+.modalHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  border-bottom: 1px solid #e1e1e1;
+
+  h3 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+  }
+}
+
+.modalBody {
+  padding: 16px 20px;
+  height: calc(100% - 70px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modalContent {
+  display: grid;
+  grid-template-columns: 1.7fr 1fr;
+  gap: 18px;
+  height: 100%;
+  min-height: 0;
+}
+
+.previewPanel {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-height: 0;
+}
+
+.previewControls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.currentPageLabel {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.previewCanvasWrapper {
+  flex: 1;
+  overflow: auto;
+  border: 1px solid #e1e1e1;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+}
+
+.previewCanvas {
+  width: auto;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.selectionPanel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pageSelectionList {
+  display: grid;
+  gap: 8px;
+  max-height: 280px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.pageSelectionItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid #e1e1e1;
+  border-radius: 4px;
+  background: #fafafa;
+}
+
+.formSection {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-top: 1px solid #e1e1e1;
+  background: #fafafa;
+
+  .ms-TextField {
+    margin-bottom: 0;
+  }
+
+  .ms-Button {
+    align-self: flex-start;
+  }
+}
+
+.welcome {
+  text-align: center;
+}
+
+.welcomeImage {
+  width: 100%;
+  max-width: 420px;
+}
+
+.links {
+  a {
+    text-decoration: none;
+    color: "[theme:link, default:#03787c]";
+    color: var(--link); // note: CSS Custom Properties support is limited to modern browsers only
+
+    &:hover {
+      text-decoration: underline;
+      color: "[theme:linkHovered, default: #014446]";
+      color: var(--linkHovered); // note: CSS Custom Properties support is limited to modern browsers only
+    }
+  }
+}

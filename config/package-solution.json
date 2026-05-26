@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "split-merge-solution-client-side-solution",
+    "id": "d93f11cf-c7f3-41d8-a749-d3c7d95ef2a0",
+    "version": "2.1.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.21.1"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "SplitMergeSolution description"
+      },
+      "longDescription": {
+        "default": "SplitMergeSolution description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "split-merge-solution Feature",
+        "description": "The feature that activates elements of the split-merge-solution solution.",
+        "id": "ca0dc9e5-4166-43a3-bb4c-b965b5347049",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/split-merge-solution.sppkg"
+  }
+}

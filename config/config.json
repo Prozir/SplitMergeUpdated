@@ -1,0 +1,18 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "split-merge-web-part": {
+      "components": [
+        {
+          "entrypoint": "./lib/webparts/splitMerge/SplitMergeWebPart.js",
+          "manifest": "./src/webparts/splitMerge/SplitMergeWebPart.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {
+    "SplitMergeWebPartStrings": "lib/webparts/splitMerge/loc/{locale}.js"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "@microsoft/generator-sharepoint": {
+    "plusBeta": false,
+    "isCreatingSolution": true,
+    "nodeVersion": "22.17.0",
+    "sdksVersions": {},
+    "version": "1.21.1",
+    "libraryName": "split-merge-solution",
+    "libraryId": "d93f11cf-c7f3-41d8-a749-d3c7d95ef2a0",
+    "environment": "spo",
+    "packageManager": "npm",
+    "solutionName": "SplitMergeSolution",
+    "solutionShortDescription": "SplitMergeSolution description",
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "componentType": "webpart"
+  }
+}
