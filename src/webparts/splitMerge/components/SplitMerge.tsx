@@ -2,7 +2,7 @@ import * as React from 'react';
 import styles from './SplitMerge.module.scss';
 import type { ISplitMergeProps } from './ISplitMergeProps';
 import { SPHttpClient } from '@microsoft/sp-http';
-import { PrimaryButton, TextField, Checkbox, Label, Spinner, SpinnerSize, DetailsList, IColumn, SelectionMode, Modal, IconButton, Link, Dropdown, IDropdownOption } from '@fluentui/react';
+import { PrimaryButton, TextField, Checkbox, Label, Spinner, SpinnerSize, DetailsList, IColumn, Selection, SelectionMode, Modal, IconButton, Link, Dropdown, IDropdownOption } from '@fluentui/react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 
@@ -10,14 +10,22 @@ import { PDFDocument } from 'pdf-lib';
 pdfjsLib.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.min.js');
 
 interface IPageInfo {
-  pageNumber: number;
+  id: string;
+  sourceFileRef: string;
+  sourceFileName: string;
+  sourcePageNumber: number;
   selected: boolean;
   thumbnail?: string;
 }
 
+interface IPdfSelection {
+  fileRef: string;
+  fileName: string;
+}
+
 export default class SplitMerge extends React.Component<ISplitMergeProps, {
   pdfFiles: any[];
-  selectedPdf: string;
+  selectedPdfFiles: IPdfSelection[];
   selectedPdfName: string;
   pages: IPageInfo[];
   currentPageNumber: number;
@@ -35,15 +43,17 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   selectedEntityKey: string;
   selectedEntitySiteUrl: string;
 }> {
-  private pdfDocument: any = null;
+  private pdfDocuments: { [fileRef: string]: any } = {};
+  private selection: Selection;
   private previewCanvasRef = React.createRef<HTMLCanvasElement>();
   private fileInputRef = React.createRef<HTMLInputElement>();
 
   constructor(props: ISplitMergeProps) {
     super(props);
+    this.selection = new Selection({ onSelectionChanged: this.handleSelectionChanged });
     this.state = {
       pdfFiles: [],
-      selectedPdf: '',
+      selectedPdfFiles: [],
       selectedPdfName: '',
       pages: [],
       currentPageNumber: 1,
@@ -80,7 +90,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
 
   componentDidUpdate(prevProps: ISplitMergeProps, prevState: Readonly<any>) {
     if (prevProps.sourceLibraryTitle !== this.props.sourceLibraryTitle) {
-      this.setState({ pdfFiles: [], selectedPdf: '', selectedPdfName: '', pages: [], errorMessage: '', showModal: false });
+      this.setState({ pdfFiles: [], selectedPdfFiles: [], selectedPdfName: '', pages: [], errorMessage: '', showModal: false });
       this.loadPdfFiles();
     }
 
@@ -88,7 +98,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       this.loadDocumentTypes();
     }
 
-    if (!prevState.showModal && this.state.showModal && this.pdfDocument) {
+    if (!prevState.showModal && this.state.showModal && this.state.pages.length > 0) {
       if (this.state.documentTypes.length === 0) {
         this.loadDocumentTypes();
       }
@@ -140,61 +150,77 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     }
   }
 
+  private handleSelectionChanged = () => {
+    const selectedItems = this.selection.getSelection() as any[];
+    const selectedPdfFiles = selectedItems.map(item => ({ fileRef: item.fileRef, fileName: item.fileName }));
+    this.setState({ selectedPdfFiles });
+  };
+
   private async loadPdf(fileUrl: string, fileName: string) {
+    return this.loadSelectedPdfs([{ fileRef: fileUrl, fileName }]);
+  }
+
+  private async loadSelectedPdfs(selectedFiles: IPdfSelection[]) {
     this.setState({ loading: true, pages: [], errorMessage: '' });
+    this.pdfDocuments = {};
+
     try {
-      
-
-      // First, try to get the file to check if it's accessible
-      const response = await this.props.context.spHttpClient.get(fileUrl, SPHttpClient.configurations.v1);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      const arrayBuffer = await response.arrayBuffer();
-      // PDF file loaded into memory
-
-      if (arrayBuffer.byteLength === 0) {
-        throw new Error('PDF file is empty');
-      }
-
-      // Check if the response is actually a PDF
-      const uint8Array = new Uint8Array(arrayBuffer);
-      if (uint8Array.length < 4 ||
-          uint8Array[0] !== 37 || uint8Array[1] !== 80 || uint8Array[2] !== 68 || uint8Array[3] !== 70) {
-        throw new Error('File is not a valid PDF');
-      }
-
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-      // PDF loaded successfully
-
-      this.pdfDocument = pdf;
       const pages: IPageInfo[] = [];
 
-      for (let i = 1; i <= pdf.numPages; i++) {
-        pages.push({
-          pageNumber: i,
-          selected: false
-        });
+      for (const file of selectedFiles) {
+        const response = await this.props.context.spHttpClient.get(file.fileRef, SPHttpClient.configurations.v1);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength === 0) {
+          throw new Error('PDF file is empty');
+        }
+
+        const uint8Array = new Uint8Array(arrayBuffer);
+        if (uint8Array.length < 4 || uint8Array[0] !== 37 || uint8Array[1] !== 80 || uint8Array[2] !== 68 || uint8Array[3] !== 70) {
+          throw new Error('File is not a valid PDF');
+        }
+
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        this.pdfDocuments[file.fileRef] = pdf;
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          pages.push({
+            id: `${file.fileRef}|${i}`,
+            sourceFileRef: file.fileRef,
+            sourceFileName: file.fileName,
+            sourcePageNumber: i,
+            selected: false
+          });
+        }
       }
 
-      this.setState({ pages, loading: false, selectedPdf: fileUrl, selectedPdfName: fileName, currentPageNumber: 1, showModal: true });
+      this.setState({
+        pages,
+        loading: false,
+        selectedPdfFiles: selectedFiles,
+        selectedPdfName: selectedFiles.map(f => f.fileName).join(', '),
+        currentPageNumber: 1,
+        showModal: true
+      });
     } catch (error) {
-      console.error('Error loading PDF:', error);
-      let errorMessage = 'Error loading PDF. ';
+      console.error('Error loading PDF(s):', error);
+      let errorMessage = 'Error loading PDF(s). ';
 
       if (error instanceof Error) {
         if (error.message.indexOf('HTTP') !== -1) {
           errorMessage += 'File access denied or file not found. Please check permissions and file path.';
         } else if (error.message.indexOf('empty') !== -1) {
-          errorMessage += 'The PDF file appears to be empty.';
+          errorMessage += 'One of the PDF files appears to be empty.';
         } else if (error.message.indexOf('valid PDF') !== -1) {
-          errorMessage += 'The file is not a valid PDF document.';
+          errorMessage += 'One of the files is not a valid PDF document.';
         } else if (error.message.indexOf('InvalidPDFException') !== -1) {
-          errorMessage += 'The PDF file is corrupted or invalid.';
+          errorMessage += 'One of the PDF files is corrupted or invalid.';
         } else if (error.message.indexOf('MissingPDFException') !== -1) {
-          errorMessage += 'PDF file not found or inaccessible.';
+          errorMessage += 'One of the PDF files was not found or is inaccessible.';
         } else {
           errorMessage += error.message;
         }
@@ -370,12 +396,21 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   }
 
   private handleModalClose = () => {
-    this.pdfDocument = null;
-    this.setState({ showModal: false, pages: [], selectedPdf: '', selectedPdfName: '', currentPageNumber: 1 });
+    this.pdfDocuments = {};
+    this.selection.setAllSelected(false);
+    this.setState({ showModal: false, pages: [], selectedPdfFiles: [], selectedPdfName: '', currentPageNumber: 1 });
   };
 
   private handlePdfSelect = (fileRef: string, fileName: string) => {
     this.loadPdf(fileRef, fileName);
+  };
+
+  private handleOpenSelectedClick = () => {
+    const { selectedPdfFiles } = this.state;
+    if (selectedPdfFiles.length === 0) {
+      return;
+    }
+    this.loadSelectedPdfs(selectedPdfFiles);
   };
 
   private handleUploadButtonClick = () => {
@@ -426,20 +461,30 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     }
   };
 
-  private handlePageSelect = (pageNumber: number, selected: boolean) => {
+  private handlePageSelect = (pageId: string, selected: boolean) => {
     this.setState(prevState => ({
       pages: prevState.pages.map(page =>
-        page.pageNumber === pageNumber ? { ...page, selected } : page
+        page.id === pageId ? { ...page, selected } : page
       )
     }));
   };
 
   private async renderPdfPage(pageNumber: number) {
-    if (!this.pdfDocument || !this.previewCanvasRef.current) {
+    if (!this.previewCanvasRef.current) {
       return;
     }
 
-    const page = await this.pdfDocument.getPage(pageNumber);
+    const pageInfo = this.state.pages[pageNumber - 1];
+    if (!pageInfo) {
+      return;
+    }
+
+    const pdf = this.pdfDocuments[pageInfo.sourceFileRef];
+    if (!pdf) {
+      return;
+    }
+
+    const page = await pdf.getPage(pageInfo.sourcePageNumber);
     const scale = 1.5;
     const viewport = page.getViewport({ scale });
 
@@ -469,8 +514,6 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     const { pages, newContractNumber, newDocumentType, selectedEntityKey, selectedEntitySiteUrl } = this.state;
     const { destinationLibraryTitle, destinationDocumentRepositoryTitle, sourceLibraryTitle, context } = this.props;
     const selectedPages = pages.filter(p => p.selected);
-
-    // collate/upload triggered
 
     if (selectedPages.length === 0 || !newContractNumber || !newDocumentType || !selectedEntityKey) {
       alert('Please select pages and enter contract number, document type, and entity.');
@@ -506,21 +549,30 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     this.setState({ uploading: true });
 
     try {
-      // Load the original PDF
-      const response = await context.spHttpClient.get(this.state.selectedPdf, SPHttpClient.configurations.v1);
-      const arrayBuffer = await response.arrayBuffer();
-      const originalPdf = await PDFDocument.load(arrayBuffer);
+      const sourcePdfMap: { [fileRef: string]: PDFDocument } = {};
+      const uniqueSourceFiles = selectedPages.reduce<{ [fileRef: string]: string }>((acc, pageInfo) => {
+        acc[pageInfo.sourceFileRef] = pageInfo.sourceFileName;
+        return acc;
+      }, {});
 
-      // Create new PDF with selected pages for destination
       const newPdf = await PDFDocument.create();
+
       for (const pageInfo of selectedPages) {
-        const [copiedPage] = await newPdf.copyPages(originalPdf, [pageInfo.pageNumber - 1]);
+        if (!sourcePdfMap[pageInfo.sourceFileRef]) {
+          const response = await context.spHttpClient.get(pageInfo.sourceFileRef, SPHttpClient.configurations.v1);
+          if (!response.ok) {
+            throw new Error(`Failed to load source PDF ${pageInfo.sourceFileName}: ${response.status} ${response.statusText}`);
+          }
+          const arrayBuffer = await response.arrayBuffer();
+          sourcePdfMap[pageInfo.sourceFileRef] = await PDFDocument.load(arrayBuffer);
+        }
+
+        const originalPdf = sourcePdfMap[pageInfo.sourceFileRef];
+        const [copiedPage] = await newPdf.copyPages(originalPdf, [pageInfo.sourcePageNumber - 1]);
         newPdf.addPage(copiedPage);
       }
 
       const pdfBytes = await newPdf.save();
-
-      // Upload merged file to destination library
       const fileName = `Merged_${newContractNumber}_${newDocumentType}.pdf`;
       const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(destinationLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
 
@@ -538,7 +590,6 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
 
       const uploadResult = await uploadResponse.json();
       const serverRelativeUrl = uploadResult?.ServerRelativeUrl || uploadResult?.ServerRelativeUrlRaw || '';
-
       if (!serverRelativeUrl) {
         throw new Error('Uploaded file response did not include ServerRelativeUrl. Cannot update metadata.');
       }
@@ -605,64 +656,77 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
         throw new Error('Unable to determine the current user ID for AssignedTo update.');
       }
 
-      const sourceFileUrlEncoded = encodeURIComponent(this.state.selectedPdf);
-      const sourceMetadataUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${sourceFileUrlEncoded}')/ListItemAllFields`;
+      const sourceFileRefs = Object.keys(uniqueSourceFiles);
+      const remainingFileRefs = new Set<string>();
 
-      const sourceMetadataResponse = await context.spHttpClient.post(sourceMetadataUrl, SPHttpClient.configurations.v1, {
-        headers: {
-          'Content-Type': 'application/json;odata=nometadata',
-          'Accept': 'application/json;odata=nometadata',
-          'IF-MATCH': '*',
-          'X-HTTP-Method': 'MERGE'
-        },
-        body: JSON.stringify({
-          AssignedToId: currentUserId
-        })
-      });
+      for (const sourceFileRef of sourceFileRefs) {
+        const filePages = pages.filter(p => p.sourceFileRef === sourceFileRef);
+        const remainingPages = filePages.filter(p => !p.selected);
 
-      if (!sourceMetadataResponse.ok) {
-        throw new Error(`Source file assignment update failed: ${sourceMetadataResponse.status} ${sourceMetadataResponse.statusText}`);
+        if (remainingPages.length === 0) {
+          const deleteUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(sourceFileRef)}')`;
+          const deleteResponse = await context.spHttpClient.post(deleteUrl, SPHttpClient.configurations.v1, {
+            headers: {
+              'IF-MATCH': '*',
+              'X-HTTP-Method': 'DELETE'
+            }
+          });
+
+          if (!deleteResponse.ok) {
+            throw new Error(`Source file delete failed for ${sourceFileRef}: ${deleteResponse.status} ${deleteResponse.statusText}`);
+          }
+        } else {
+          remainingFileRefs.add(sourceFileRef);
+          const remainingPdf = await PDFDocument.create();
+          const originalPdf = sourcePdfMap[sourceFileRef];
+
+          for (const pageInfo of remainingPages) {
+            const [copiedPage] = await remainingPdf.copyPages(originalPdf, [pageInfo.sourcePageNumber - 1]);
+            remainingPdf.addPage(copiedPage);
+          }
+
+          const remainingBytes = await remainingPdf.save();
+          const fileName = uniqueSourceFiles[sourceFileRef];
+          const sourceUploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(sourceLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
+
+          const overwriteResponse = await context.spHttpClient.post(sourceUploadUrl, SPHttpClient.configurations.v1, {
+            body: remainingBytes,
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Accept': 'application/json;odata=nometadata'
+            }
+          });
+
+          if (!overwriteResponse.ok) {
+            throw new Error(`Source file overwrite failed for ${sourceFileRef}: ${overwriteResponse.status} ${overwriteResponse.statusText}`);
+          }
+        }
       }
 
-      const remainingPages = pages.filter(p => !p.selected);
-      if (remainingPages.length === 0) {
-        const deleteUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(this.state.selectedPdf)}')`;
-        const deleteResponse = await context.spHttpClient.post(deleteUrl, SPHttpClient.configurations.v1, {
+      const remainingFileRefsArray: string[] = [];
+      remainingFileRefs.forEach(ref => remainingFileRefsArray.push(ref));
+      for (const sourceFileRef of remainingFileRefsArray) {
+        const sourceMetadataUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(sourceFileRef)}')/ListItemAllFields`;
+        const sourceMetadataResponse = await context.spHttpClient.post(sourceMetadataUrl, SPHttpClient.configurations.v1, {
           headers: {
+            'Content-Type': 'application/json;odata=nometadata',
+            'Accept': 'application/json;odata=nometadata',
             'IF-MATCH': '*',
-            'X-HTTP-Method': 'DELETE'
-          }
+            'X-HTTP-Method': 'MERGE'
+          },
+          body: JSON.stringify({
+            AssignedToId: currentUserId
+          })
         });
 
-        if (!deleteResponse.ok) {
-          throw new Error(`Source file delete failed: ${deleteResponse.status} ${deleteResponse.statusText}`);
-        }
-      } else {
-        const remainingPdf = await PDFDocument.create();
-        for (const pageInfo of remainingPages) {
-          const [copiedPage] = await remainingPdf.copyPages(originalPdf, [pageInfo.pageNumber - 1]);
-          remainingPdf.addPage(copiedPage);
-        }
-
-        const remainingBytes = await remainingPdf.save();
-        const sourceUploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${sourceLibraryTitle}')/RootFolder/Files/add(url='${encodeURIComponent(this.state.selectedPdfName)}',overwrite=true)`;
-
-        const overwriteResponse = await context.spHttpClient.post(sourceUploadUrl, SPHttpClient.configurations.v1, {
-          body: remainingBytes,
-          headers: {
-            'Content-Type': 'application/pdf',
-            'Accept': 'application/json;odata=nometadata'
-          }
-        });
-
-        if (!overwriteResponse.ok) {
-          throw new Error(`Source file overwrite failed: ${overwriteResponse.status} ${overwriteResponse.statusText}`);
+        if (!sourceMetadataResponse.ok) {
+          throw new Error(`Source file assignment update failed for ${sourceFileRef}: ${sourceMetadataResponse.status} ${sourceMetadataResponse.statusText}`);
         }
       }
 
       alert('PDF collated and uploaded successfully.');
       await this.loadPdfFiles();
-      this.setState({ uploading: false, pages: [], selectedPdf: '', selectedPdfName: '', showModal: false, newContractNumber: '', newDocumentType: '', errorMessage: '' });
+      this.setState({ uploading: false, pages: [], selectedPdfFiles: [], selectedPdfName: '', showModal: false, newContractNumber: '', newDocumentType: '', errorMessage: '' });
     } catch (error) {
       console.error('Error collating, uploading, or updating source PDF:', error);
       alert('Error occurred. Please try again.');
@@ -671,7 +735,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   }
 
   public render(): React.ReactElement<ISplitMergeProps> {
-    const { pdfFiles, pages, loading, newContractNumber, newDocumentType, uploading, uploadingSource, errorMessage, entityOptions, loadingEntities, selectedEntityKey } = this.state;
+    const { pdfFiles, pages, loading, newContractNumber, newDocumentType, uploading, uploadingSource, errorMessage, entityOptions, loadingEntities, selectedEntityKey, selectedPdfFiles } = this.state;
 
     const columns: IColumn[] = [
       {
@@ -735,11 +799,16 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       <section className={`${styles.splitMerge} ${this.props.hasTeamsContext ? styles.teams : ''}`}>
         <div>
           {this.props.title && <h3>{this.props.title}</h3>}
-          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <PrimaryButton
               text="Upload New PDF"
               onClick={this.handleUploadButtonClick}
               disabled={!this.props.sourceLibraryTitle || uploadingSource}
+            />
+            <PrimaryButton
+              text="Open Selected PDF(s)"
+              onClick={this.handleOpenSelectedClick}
+              disabled={selectedPdfFiles.length === 0 || loading}
             />
             <input
               ref={this.fileInputRef}
@@ -758,6 +827,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
               <DetailsList
                 items={items}
                 columns={columns}
+                selection={this.selection}
                 selectionMode={SelectionMode.multiple}
                 setKey="pdfFiles"
               />
@@ -773,7 +843,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
           containerClassName={styles.modalContainer}
         >
           <div className={styles.modalHeader}>
-            <h3>Select Pages from: {this.state.selectedPdfName}</h3>
+            <h3>Select Pages from: {this.state.selectedPdfName || 'selected PDF(s)'}</h3>
             <IconButton
               iconProps={{ iconName: 'Cancel' }}
               onClick={this.handleModalClose}
@@ -791,8 +861,12 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                       disabled={this.state.currentPageNumber <= 1}
                     />
                     <Label className={styles.currentPageLabel}>
-                      Page {this.state.currentPageNumber} of {pages.length}
-                    </Label>
+                        Page {this.state.currentPageNumber} of {pages.length}
+                        {this.state.pages.length > 0 && (() => {
+                          const currentPage = this.state.pages[this.state.currentPageNumber - 1];
+                          return currentPage ? ` (${currentPage.sourceFileName} page ${currentPage.sourcePageNumber})` : '';
+                        })()}
+                      </Label>
                     <PrimaryButton
                       text="Next"
                       onClick={() => this.handlePageNavigation(this.state.currentPageNumber + 1)}
@@ -806,17 +880,17 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                 <div className={styles.selectionPanel}>
                   <Label>Page Selection</Label>
                   <div className={styles.pageSelectionList}>
-                    {pages.map(page => (
-                      <div key={page.pageNumber} className={styles.pageSelectionItem}>
+                    {pages.map((page, index) => (
+                      <div key={page.id} className={styles.pageSelectionItem}>
                         <Checkbox
-                          label={`Page ${page.pageNumber}`}
+                          label={`Page ${page.sourcePageNumber} from ${page.sourceFileName}`}
                           checked={page.selected}
-                          onChange={(ev, checked) => this.handlePageSelect(page.pageNumber, checked || false)}
+                          onChange={(ev, checked) => this.handlePageSelect(page.id, checked || false)}
                         />
                         <PrimaryButton
                           text="Preview"
-                          onClick={() => this.handlePageNavigation(page.pageNumber)}
-                          disabled={this.state.currentPageNumber === page.pageNumber}
+                          onClick={() => this.handlePageNavigation(index + 1)}
+                          disabled={this.state.currentPageNumber === index + 1}
                         />
                       </div>
                     ))}
