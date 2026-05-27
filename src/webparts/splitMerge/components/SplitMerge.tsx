@@ -728,6 +728,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       alert('PDF collated and uploaded successfully.');
       await this.loadPdfFiles();
       this.setState({ uploading: false, pages: [], selectedPdfFiles: [], selectedPdfName: '', showModal: false, newContractNumber: '', newDocumentType: '', errorMessage: '' });
+      this.handleModalClose();
     } catch (error) {
       console.error('Error collating, uploading, or updating source PDF:', error);
       alert('Error occurred. Please try again.');
