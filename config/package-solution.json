@@ -3,7 +3,7 @@
   "solution": {
     "name": "split-merge-solution-client-side-solution",
     "id": "d93f11cf-c7f3-41d8-a749-d3c7d95ef2a0",
-    "version": "2.2.0.0",
+    "version": "2.3.0.0",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
