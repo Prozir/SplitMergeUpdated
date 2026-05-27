@@ -573,7 +573,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       }
 
       const pdfBytes = await newPdf.save();
-      const fileName = `Merged_${newContractNumber}_${newDocumentType}.pdf`;
+      const timestamp = new Date().toISOString().replace(/[T:.]/g, '-').substring(0, 19);
+      const fileName = `Merged_${newContractNumber}_${newDocumentType}_${timestamp}.pdf`;
       const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(destinationLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
 
       const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
