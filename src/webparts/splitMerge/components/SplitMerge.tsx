@@ -574,7 +574,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
 
       const pdfBytes = await newPdf.save();
       const timestamp = new Date().toISOString().replace(/[T:.]/g, '-').substring(0, 19);
-      const fileName = `Merged_${newContractNumber}_${newDocumentType}_${timestamp}.pdf`;
+      const fileName = `${newContractNumber}_${newDocumentType}_${timestamp}.pdf`;
       const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(destinationLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
 
       const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
@@ -739,6 +739,9 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   public render(): React.ReactElement<ISplitMergeProps> {
     const { pdfFiles, pages, loading, newContractNumber, newDocumentType, uploading, uploadingSource, errorMessage, entityOptions, loadingEntities, selectedEntityKey, selectedPdfFiles } = this.state;
 
+    const allPagesSelected = pages.length > 0 && pages.every(p => p.selected);
+    const somePagesSelected = pages.some(p => p.selected) && !allPagesSelected;
+
     const columns: IColumn[] = [
       {
         key: 'fileName',
@@ -881,6 +884,14 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                 </div>
                 <div className={styles.selectionPanel}>
                   <Label>Page Selection</Label>
+                  <Checkbox
+                    label="Select All"
+                    checked={allPagesSelected}
+                    indeterminate={somePagesSelected}
+                    onChange={(ev, checked) => this.setState(prevState => ({
+                      pages: prevState.pages.map(page => ({ ...page, selected: checked || false }))
+                    }))}
+                  />
                   <div className={styles.pageSelectionList}>
                     {pages.map((page, index) => (
                       <div key={page.id} className={styles.pageSelectionItem}>
