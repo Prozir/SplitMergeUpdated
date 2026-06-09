@@ -5,6 +5,7 @@ import { SPHttpClient } from '@microsoft/sp-http';
 import { PrimaryButton, TextField, Checkbox, Label, Spinner, SpinnerSize, DetailsList, IColumn, Selection, SelectionMode, Modal, IconButton, Link, Dropdown, IDropdownOption } from '@fluentui/react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
+import AutoClassifyModal from './AutoClassifyModal';
 
 // Set PDF.js worker to use local worker
 pdfjsLib.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.min.js');
@@ -42,6 +43,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   loadingEntities: boolean;
   selectedEntityKey: string;
   selectedEntitySiteUrl: string;
+  showAutoClassifyModal: boolean;
+  selectedAutoClassifyFile: IPdfSelection | null;
 }> {
   private pdfDocuments: { [fileRef: string]: any } = {};
   private selection: Selection;
@@ -64,6 +67,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       uploadingSource: false,
       errorMessage: '',
       showModal: false,
+      showAutoClassifyModal: false,
+      selectedAutoClassifyFile: null,
       documentTypes: [],
       loadingDocumentTypes: false,
       entityOptions: [],
@@ -98,15 +103,17 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       this.loadDocumentTypes();
     }
 
-    if (!prevState.showModal && this.state.showModal && this.state.pages.length > 0) {
+    if (!prevState.showModal && this.state.showModal) {
       if (this.state.documentTypes.length === 0) {
         this.loadDocumentTypes();
       }
-      requestAnimationFrame(() => {
-        this.renderPdfPage(this.state.currentPageNumber).catch(error => {
-          console.error('Error rendering PDF page after modal open:', error);
+      if (this.state.pages.length > 0) {
+        requestAnimationFrame(() => {
+          this.renderPdfPage(this.state.currentPageNumber).catch(error => {
+            console.error('Error rendering PDF page after modal open:', error);
+          });
         });
-      });
+      }
     }
   }
 
@@ -411,6 +418,32 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       return;
     }
     this.loadSelectedPdfs(selectedPdfFiles);
+  };
+
+  private handleOpenClassifyClick = () => {
+    const { selectedPdfFiles } = this.state;
+    if (selectedPdfFiles.length !== 1) {
+      alert('Please select a single PDF file to auto classify.');
+      return;
+    }
+
+    this.setState({
+      selectedAutoClassifyFile: selectedPdfFiles[0],
+      showAutoClassifyModal: true
+    });
+  };
+
+  private handleAutoClassifyDismiss = () => {
+    this.pdfDocuments = {};
+    this.selection.setAllSelected(false);
+    this.setState({
+      showAutoClassifyModal: false,
+      selectedAutoClassifyFile: null,
+      pages: [],
+      selectedPdfFiles: [],
+      selectedPdfName: '',
+      currentPageNumber: 1
+    });
   };
 
   private handleUploadButtonClick = () => {
@@ -737,7 +770,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   }
 
   public render(): React.ReactElement<ISplitMergeProps> {
-    const { pdfFiles, pages, loading, newContractNumber, newDocumentType, uploading, uploadingSource, errorMessage, entityOptions, loadingEntities, selectedEntityKey, selectedPdfFiles } = this.state;
+    const { pdfFiles, pages, loading, newContractNumber, newDocumentType, uploading, uploadingSource, errorMessage, entityOptions, loadingEntities, selectedEntityKey, selectedPdfFiles, showAutoClassifyModal, selectedAutoClassifyFile } = this.state;
 
     const allPagesSelected = pages.length > 0 && pages.every(p => p.selected);
     const somePagesSelected = pages.some(p => p.selected) && !allPagesSelected;
@@ -814,6 +847,11 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
               text="Open Selected PDF(s)"
               onClick={this.handleOpenSelectedClick}
               disabled={selectedPdfFiles.length === 0 || loading}
+            />
+            <PrimaryButton
+              text="Auto Classify Selected PDF"
+              onClick={this.handleOpenClassifyClick}
+              disabled={selectedPdfFiles.length !== 1 || loading}
             />
             <input
               ref={this.fileInputRef}
@@ -945,6 +983,21 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
             )}
           </div>
         </Modal>
+
+        <AutoClassifyModal
+          isOpen={showAutoClassifyModal}
+          onDismiss={this.handleAutoClassifyDismiss}
+          selectedPdfFile={selectedAutoClassifyFile}
+          documentTypes={this.state.documentTypes}
+          entityOptions={this.state.entityOptions}
+          sourceLibraryTitle={this.props.sourceLibraryTitle}
+          destinationLibraryTitle={this.props.destinationLibraryTitle}
+          destinationDocumentRepositoryTitle={this.props.destinationDocumentRepositoryTitle}
+          context={this.props.context}
+          onUploadSuccess={async () => {
+            await this.loadPdfFiles();
+          }}
+        />
       </section>
     );
   }

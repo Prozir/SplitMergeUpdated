@@ -32,3 +32,6 @@ obj
 
 # Styles Generated Code
 *.scss.ts
+
+# Azure Function local settings
+azure-function/local.settings.json
