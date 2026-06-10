@@ -22,7 +22,9 @@
     "description": { "default": "SplitMerge webpart assists DMS users to split and merge related PDF pages and upload to respective DMS document repository. " },
     "officeFabricIconFontName": "SplitObject",
     "properties": {
-      "title": "PDF Split and Merge"
+      "title": "PDF Split and Merge",
+      "azureFunctionUrl": "",
+      "documentModelId": ""
     }
   }]
 }

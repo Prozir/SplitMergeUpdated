@@ -993,6 +993,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
           sourceLibraryTitle={this.props.sourceLibraryTitle}
           destinationLibraryTitle={this.props.destinationLibraryTitle}
           destinationDocumentRepositoryTitle={this.props.destinationDocumentRepositoryTitle}
+          classificationFunctionUrl={this.props.azureFunctionUrl}
+          classificationModelId={this.props.documentModelId}
           context={this.props.context}
           onUploadSuccess={async () => {
             await this.loadPdfFiles();

@@ -38,6 +38,8 @@ interface IAutoClassifyModalProps {
   sourceLibraryTitle: string;
   destinationLibraryTitle: string;
   destinationDocumentRepositoryTitle: string;
+  classificationFunctionUrl?: string;
+  classificationModelId?: string;
   context: WebPartContext;
   onUploadSuccess: () => Promise<void>;
 }
@@ -51,14 +53,16 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   sourceLibraryTitle,
   destinationLibraryTitle,
   destinationDocumentRepositoryTitle,
+  classificationFunctionUrl,
+  classificationModelId: defaultClassificationModelId,
   context,
   onUploadSuccess
 }) => {
   const [pages, setPages] = useState<IPageInfo[]>([]);
   const [currentPageNumber, setCurrentPageNumber] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [classificationEndpoint, setClassificationEndpoint] = useState('');
-  const [classificationModelId, setClassificationModelId] = useState('');
+  const [classificationEndpoint, setClassificationEndpoint] = useState(classificationFunctionUrl || '');
+  const [classificationModelId, setClassificationModelId] = useState(defaultClassificationModelId || '');
   const [classificationLoading, setClassificationLoading] = useState(false);
   const [classificationError, setClassificationError] = useState('');
   const [classificationResults, setClassificationResults] = useState<IClassificationResult[]>([]);
@@ -76,10 +80,12 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   useEffect(() => {
     if (isOpen && selectedPdfFile) {
       loadPdf(selectedPdfFile);
+      setClassificationEndpoint(classificationFunctionUrl || '');
+      setClassificationModelId(defaultClassificationModelId || '');
     } else {
       resetState();
     }
-  }, [isOpen, selectedPdfFile]);
+  }, [isOpen, selectedPdfFile, classificationFunctionUrl, defaultClassificationModelId]);
 
   useEffect(() => {
     if (isOpen && pages.length > 0) {
@@ -245,7 +251,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     }
 
     if (!classificationEndpoint.trim() || !classificationModelId.trim()) {
-      setClassificationError('Please enter the Azure Function URL and model ID.');
+      setClassificationError('Azure Function URL and Document Model ID must be configured in the web part properties.');
       return;
     }
 
@@ -716,18 +722,6 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
           <div className={styles.selectionPanel}>
             <Label>Document Classification</Label>
-            <TextField
-              label="Azure Function URL"
-              value={classificationEndpoint}
-              onChange={(ev, value) => setClassificationEndpoint(value || '')}
-              placeholder="https://<your-function-app>.azurewebsites.net"
-              description="Enter the Function App base URL (with or without /api/classify). The code will normalize it automatically."
-            />
-            <TextField
-              label="Model ID"
-              value={classificationModelId}
-              onChange={(ev, value) => setClassificationModelId(value || '')}
-            />
             <PrimaryButton text="Classify Document" onClick={classifySelectedDocument} disabled={classificationLoading || loading || !selectedPdfFile} />
             {classificationLoading && <Spinner size={SpinnerSize.small} label="Classifying document..." />}
             {classificationError && <div style={{ color: 'red' }}>{classificationError}</div>}
