@@ -45,6 +45,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   selectedEntitySiteUrl: string;
   showAutoClassifyModal: boolean;
   selectedAutoClassifyFile: IPdfSelection | null;
+  disableAutoClassify: boolean;
 }> {
   private pdfDocuments: { [fileRef: string]: any } = {};
   private selection: Selection;
@@ -75,6 +76,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       loadingEntities: false,
       selectedEntityKey: '',
       selectedEntitySiteUrl: ''
+      ,
+      disableAutoClassify: false
     };
   }
 
@@ -123,7 +126,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
 
     try {
       const response = await context.spHttpClient.get(
-        `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${sourceLibraryTitle}')/items?$filter=substringof('.pdf',FileLeafRef)&$select=FileLeafRef,FileRef,Created,Modified,Author/Title,AssignedTo/Title,AssignedTo/EMail&$expand=Author,AssignedTo`,
+        `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${sourceLibraryTitle}')/items?$filter=substringof('.pdf',FileLeafRef)&$select=FileLeafRef,FileRef,Created,Modified,Author/Title,AssignedTo/Title,AssignedTo/EMail,AzureResponse,AutoClassifyStatus&$expand=Author,AssignedTo`,
         SPHttpClient.configurations.v1
       );
       const data = await response.json();
@@ -160,7 +163,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   private handleSelectionChanged = () => {
     const selectedItems = this.selection.getSelection() as any[];
     const selectedPdfFiles = selectedItems.map(item => ({ fileRef: item.fileRef, fileName: item.fileName }));
-    this.setState({ selectedPdfFiles });
+    const disable = !(selectedItems.length === 1 && selectedItems[0]?.azureResponse && String(selectedItems[0].azureResponse).trim() !== '');
+    this.setState({ selectedPdfFiles, disableAutoClassify: disable });
   };
 
   private async loadPdf(fileUrl: string, fileName: string) {
@@ -775,6 +779,11 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     const allPagesSelected = pages.length > 0 && pages.every(p => p.selected);
     const somePagesSelected = pages.some(p => p.selected) && !allPagesSelected;
 
+    const renderCell = (item: any, field: string) => {
+      const color = item.azureResponse && String(item.azureResponse).trim() !== '' ? undefined : 'grey';
+      return <span style={{ color }}>{item[field]}</span>;
+    };
+
     const columns: IColumn[] = [
       {
         key: 'fileName',
@@ -790,7 +799,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
             }}
             disabled={loading}
           >
-            {item.fileName}
+            <span style={{ color: item.azureResponse && String(item.azureResponse).trim() !== '' ? undefined : 'grey' }}>{item.fileName}</span>
           </Link>
         )
       },
@@ -824,13 +833,33 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       }
     ];
 
+    // Add the AutoClassifyStatus column and ensure items include AzureResponse
+    columns.push({
+      key: 'autoClassifyStatus',
+      name: 'AutoClassifyStatus',
+      fieldName: 'autoClassifyStatus',
+      minWidth: 150,
+      maxWidth: 200,
+      onRender: (item) => renderCell(item, 'autoClassifyStatus')
+    });
+
+    // Ensure other columns render with grey when AzureResponse is missing
+    // Add onRender to created/modified/author/assignedTo columns
+    columns.forEach(col => {
+      if (!col.onRender) {
+        col.onRender = (item: any) => renderCell(item, col.fieldName || '');
+      }
+    });
+
     const items = pdfFiles.map(file => ({
       fileName: file.FileLeafRef,
       fileRef: file.FileRef,
       created: new Date(file.Created).toLocaleString(),
       modified: new Date(file.Modified).toLocaleString(),
       author: file.Author?.Title || 'Unknown',
-      assignedTo: file.AssignedTo?.Title || 'Unassigned'
+      assignedTo: file.AssignedTo?.Title || 'Unassigned',
+      azureResponse: file.AzureResponse || '',
+      autoClassifyStatus: file.AutoClassifyStatus || ''
     }));
 
     return (
@@ -844,14 +873,14 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
               disabled={!this.props.sourceLibraryTitle || uploadingSource}
             />
             <PrimaryButton
-              text="Open Selected PDF(s)"
+              text="Manual Split & Classify"
               onClick={this.handleOpenSelectedClick}
               disabled={selectedPdfFiles.length === 0 || loading}
             />
             <PrimaryButton
-              text="Auto Classify Selected PDF"
+              text="Auto Split & Classify"
               onClick={this.handleOpenClassifyClick}
-              disabled={selectedPdfFiles.length !== 1 || loading}
+              disabled={selectedPdfFiles.length !== 1 || loading || this.state.disableAutoClassify}
             />
             <input
               ref={this.fileInputRef}
@@ -993,8 +1022,6 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
           sourceLibraryTitle={this.props.sourceLibraryTitle}
           destinationLibraryTitle={this.props.destinationLibraryTitle}
           destinationDocumentRepositoryTitle={this.props.destinationDocumentRepositoryTitle}
-          classificationFunctionUrl={this.props.azureFunctionUrl}
-          classificationModelId={this.props.documentModelId}
           context={this.props.context}
           onUploadSuccess={async () => {
             await this.loadPdfFiles();

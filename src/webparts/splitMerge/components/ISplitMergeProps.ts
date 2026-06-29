@@ -10,7 +10,5 @@ export interface ISplitMergeProps {
   destinationLibraryTitle: string;
   destinationDocumentRepositoryTitle: string;
   documentTypeConfigListTitle: string;
-  azureFunctionUrl: string;
-  documentModelId: string;
   context: WebPartContext;
 }

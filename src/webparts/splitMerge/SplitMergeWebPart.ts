@@ -18,8 +18,6 @@ export interface ISplitMergeWebPartProps {
   destinationLibraryTitle: string;
   destinationDocumentRepositoryTitle: string;
   documentTypeConfigListTitle: string;
-  azureFunctionUrl: string;
-  documentModelId: string;
 }
 
 export default class SplitMergeWebPart extends BaseClientSideWebPart<ISplitMergeWebPartProps> {
@@ -29,7 +27,7 @@ export default class SplitMergeWebPart extends BaseClientSideWebPart<ISplitMerge
 
   public render(): void {
     const element: React.ReactElement<ISplitMergeProps> = React.createElement(
-      SplitMerge,
+        SplitMerge,
       {
         title: this.properties.title,
         isDarkTheme: this._isDarkTheme,
@@ -40,9 +38,8 @@ export default class SplitMergeWebPart extends BaseClientSideWebPart<ISplitMerge
         destinationLibraryTitle: this.properties.destinationLibraryTitle,
         destinationDocumentRepositoryTitle: this.properties.destinationDocumentRepositoryTitle,
         documentTypeConfigListTitle: this.properties.documentTypeConfigListTitle,
-        azureFunctionUrl: this.properties.azureFunctionUrl || '',
-        documentModelId: this.properties.documentModelId || '',
         context: this.context
+        
       }
     );
 
@@ -136,12 +133,7 @@ export default class SplitMergeWebPart extends BaseClientSideWebPart<ISplitMerge
                 PropertyPaneTextField('documentTypeConfigListTitle', {
                   label: 'Document Type Config List Title'
                 }),
-                PropertyPaneTextField('azureFunctionUrl', {
-                  label: 'Azure Function URL'
-                }),
-                PropertyPaneTextField('documentModelId', {
-                  label: 'Document Model ID'
-                })
+                
               ]
             }
           ]

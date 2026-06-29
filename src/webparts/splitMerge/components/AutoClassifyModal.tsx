@@ -38,8 +38,6 @@ interface IAutoClassifyModalProps {
   sourceLibraryTitle: string;
   destinationLibraryTitle: string;
   destinationDocumentRepositoryTitle: string;
-  classificationFunctionUrl?: string;
-  classificationModelId?: string;
   context: WebPartContext;
   onUploadSuccess: () => Promise<void>;
 }
@@ -53,16 +51,13 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   sourceLibraryTitle,
   destinationLibraryTitle,
   destinationDocumentRepositoryTitle,
-  classificationFunctionUrl,
-  classificationModelId: defaultClassificationModelId,
   context,
   onUploadSuccess
 }) => {
   const [pages, setPages] = useState<IPageInfo[]>([]);
   const [currentPageNumber, setCurrentPageNumber] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [classificationEndpoint, setClassificationEndpoint] = useState(classificationFunctionUrl || '');
-  const [classificationModelId, setClassificationModelId] = useState(defaultClassificationModelId || '');
+  
   const [classificationLoading, setClassificationLoading] = useState(false);
   const [classificationError, setClassificationError] = useState('');
   const [classificationResults, setClassificationResults] = useState<IClassificationResult[]>([]);
@@ -74,18 +69,23 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   const [uploading, setUploading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [pdfDocument, setPdfDocument] = useState<any>(null);
-  const [selectedPdfBytes, setSelectedPdfBytes] = useState<ArrayBuffer | null>(null);
+  
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     if (isOpen && selectedPdfFile) {
-      loadPdf(selectedPdfFile);
-      setClassificationEndpoint(classificationFunctionUrl || '');
-      setClassificationModelId(defaultClassificationModelId || '');
+      (async () => {
+        const bytes = await loadPdf(selectedPdfFile);
+        try {
+          await classifySelectedDocument(bytes);
+        } catch (e) {
+          // error handled inside classifySelectedDocument
+        }
+      })();
     } else {
       resetState();
     }
-  }, [isOpen, selectedPdfFile, classificationFunctionUrl, defaultClassificationModelId]);
+  }, [isOpen, selectedPdfFile]);
 
   useEffect(() => {
     if (isOpen && pages.length > 0) {
@@ -103,8 +103,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     setClassificationError('');
     setClassificationResults([]);
     setSelectedDetectedDocumentType('');
-    setClassificationEndpoint('');
-    setClassificationModelId('');
+    
     setNewContractNumber('');
     setNewDocumentType('');
     setSelectedEntityKey('');
@@ -112,10 +111,9 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     setUploading(false);
     setErrorMessage('');
     setPdfDocument(null);
-    setSelectedPdfBytes(null);
   };
 
-  const loadPdf = async (selectedFile: IPdfSelection) => {
+  const loadPdf = async (selectedFile: IPdfSelection): Promise<ArrayBuffer | null> => {
     setLoading(true);
     setErrorMessage('');
     setPages([]);
@@ -141,7 +139,6 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
       const pdf = await pdfjsLib.getDocument({ data: pdfBytesForPdfJs }).promise;
       setPdfDocument(pdf);
-      setSelectedPdfBytes(pdfBytes);
 
       const loadedPages: IPageInfo[] = [];
       for (let i = 1; i <= pdf.numPages; i++) {
@@ -156,9 +153,12 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
       setPages(loadedPages);
       setCurrentPageNumber(1);
+
+      return pdfBytes;
     } catch (error) {
       console.error('Error loading PDF for classification:', error);
       setErrorMessage(error instanceof Error ? error.message : 'Error loading PDF.');
+      return null;
     } finally {
       setLoading(false);
     }
@@ -239,52 +239,51 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     }
   };
 
-  const classifySelectedDocument = async () => {
+  const classifySelectedDocument = async (bytes?: ArrayBuffer | null) => {
     if (!selectedPdfFile) {
       setClassificationError('No file selected for classification.');
       return;
     }
+    // When reading stored `AzureResponse` we do not need the PDF bytes.
 
-    if (!selectedPdfBytes) {
-      setClassificationError('The PDF bytes are not loaded yet. Please reopen the file.');
-      return;
-    }
-
-    if (!classificationEndpoint.trim() || !classificationModelId.trim()) {
-      setClassificationError('Azure Function URL and Document Model ID must be configured in the web part properties.');
-      return;
-    }
-
+    // New flow: read stored Azure Document Intelligence response from the file's
+    // `AzureResponse` column in the same library instead of calling the Azure Function.
     setClassificationLoading(true);
     setClassificationError('');
     setClassificationResults([]);
     setSelectedDetectedDocumentType('');
 
     try {
-      const functionUrl = getClassificationFunctionUrl(classificationEndpoint.trim());
-      const modelId = classificationModelId.trim();
-      const response = await fetch(functionUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        },
-        body: JSON.stringify({
-          modelId,
-          fileBase64: arrayBufferToBase64(selectedPdfBytes)
-        })
-      });
-
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`Classification request failed: ${response.status} ${response.statusText} - ${body}`);
+      const serverRelative = getServerRelativeUrl(selectedPdfFile.fileRef);
+      if (!serverRelative) {
+        throw new Error('Unable to determine server-relative URL for the selected file.');
       }
 
-      const resultJson = await response.json();
+      const fileUrlEncoded = encodeURIComponent(serverRelative);
+      const listItemUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${fileUrlEncoded}')/ListItemAllFields?$select=AzureResponse`;
+
+      const metaResponse = await context.spHttpClient.get(listItemUrl, SPHttpClient.configurations.v1);
+      if (!metaResponse.ok) {
+        const body = await metaResponse.text();
+        throw new Error(`Failed to retrieve AzureResponse metadata: ${metaResponse.status} ${metaResponse.statusText} - ${body}`);
+      }
+
+      const metaJson = await metaResponse.json();
+      const azureResponseText = metaJson?.AzureResponse || '';
+      if (!azureResponseText || typeof azureResponseText !== 'string' || azureResponseText.trim() === '') {
+        throw new Error('AzureResponse column is empty for this file.');
+      }
+
+      let resultJson: any = null;
+      try {
+        resultJson = JSON.parse(azureResponseText);
+      } catch (e) {
+        throw new Error('AzureResponse contains invalid JSON.');
+      }
 
       const results = parseClassificationResults(resultJson);
       if (results.length === 0) {
-        throw new Error('No document types were detected by the classification model.');
+        throw new Error('No document types were detected by the stored Document Intelligence response.');
       }
 
       const firstKey = results[0].key;
@@ -297,38 +296,13 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     } catch (error) {
       console.error('Classification error:', error);
       const rawMessage = error instanceof Error ? error.message : String(error);
-      const corsMessage = getAzureCorsErrorMessage(rawMessage);
-      setClassificationError(corsMessage || rawMessage || 'Unknown classification error');
+      setClassificationError(rawMessage || 'Unknown classification error');
     } finally {
       setClassificationLoading(false);
     }
   };
 
-  const getAzureCorsErrorMessage = (message: string) => {
-    const lower = message.toLowerCase();
-    if (lower.indexOf('cors') !== -1 || lower.indexOf('access-control') !== -1 || lower.indexOf('failed to fetch') !== -1 || lower.indexOf('networkrequest failed') !== -1) {
-      return 'Browser request blocked by CORS. Document Intelligence must be called through a server-side proxy or backend API, not directly from SharePoint client-side code with a subscription key.';
-    }
-    return null;
-  };
-
-  const getClassificationFunctionUrl = (endpoint: string) => {
-    const trimmed = endpoint.replace(/\/api\/classify\/?$/i, '').replace(/\/+$/g, '');
-    return `${trimmed}/api/classify`;
-  };
-
-  const arrayBufferToBase64 = (buffer: ArrayBuffer): string => {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      const chunk = bytes.subarray(i, i + chunkSize);
-      for (let j = 0; j < chunk.length; j++) {
-        binary += String.fromCharCode(chunk[j]);
-      }
-    }
-    return window.btoa(binary);
-  };
+  
 
   const parseClassificationResults = (classificationJson: any): IClassificationResult[] => {
     const rawDocuments = classificationJson.documents || classificationJson.analyzeResult?.documents || classificationJson.documentResults || [];
@@ -722,7 +696,6 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
           <div className={styles.selectionPanel}>
             <Label>Document Classification</Label>
-            <PrimaryButton text="Classify Document" onClick={classifySelectedDocument} disabled={classificationLoading || loading || !selectedPdfFile} />
             {classificationLoading && <Spinner size={SpinnerSize.small} label="Classifying document..." />}
             {classificationError && <div style={{ color: 'red' }}>{classificationError}</div>}
             {errorMessage && <div style={{ color: 'red' }}>{errorMessage}</div>}
