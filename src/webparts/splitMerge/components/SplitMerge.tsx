@@ -125,35 +125,23 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     if (!sourceLibraryTitle) return;
 
     try {
-      const response = await context.spHttpClient.get(
-        `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${sourceLibraryTitle}')/items?$filter=substringof('.pdf',FileLeafRef)&$select=FileLeafRef,FileRef,Created,Modified,Author/Title,AssignedTo/Title,AssignedTo/EMail,AzureResponse,AutoClassifyStatus&$expand=Author,AssignedTo`,
-        SPHttpClient.configurations.v1
-      );
-      const data = await response.json();
-      const currentUserEmail = context.pageContext.user.email?.toLowerCase();
-      const filteredFiles = data.value.filter((file: any) => {
-        const assigned = file.AssignedTo;
-        if (!assigned) {
-          return true;
+      const files: any[] = [];
+      let nextUrl: string | undefined = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${this.safeODataString(sourceLibraryTitle)}')/items?$filter=substringof('.pdf',FileLeafRef)&$select=FileLeafRef,FileRef,Created,Modified,Author/Title,AssignedTo/Title,AssignedTo/EMail,AzureResponse,AutoClassifyStatus&$expand=Author,AssignedTo&$orderby=Created desc&$top=5000`;
+
+      while (nextUrl) {
+        const response = await context.spHttpClient.get(nextUrl, SPHttpClient.configurations.v1);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
         }
 
-        const users = Array.isArray(assigned) ? assigned : [assigned];
-        const assignedEmails: string[] = users
-          .map((user: any) => user?.EMail?.toLowerCase())
-          .filter((email: string) => !!email) as string[];
+        const data = await response.json();
+        const pageItems = data.value || data.d?.results || [];
+        files.push(...pageItems);
+        nextUrl = data['@odata.nextLink'] || data['odata.nextLink'] || data.d?.__next;
+      }
 
-        if (assignedEmails.length > 0) {
-          return currentUserEmail ? assignedEmails.indexOf(currentUserEmail) > -1 : false;
-        }
-
-        const assignedTitles: string[] = users
-          .map((user: any) => user?.Title)
-          .filter((title: string) => !!title) as string[];
-
-        return currentUserEmail ? assignedTitles.indexOf(context.pageContext.user.displayName) > -1 : false;
-      });
-
-      this.setState({ pdfFiles: filteredFiles, errorMessage: '' });
+      this.setState({ pdfFiles: files, errorMessage: '' });
     } catch (error) {
       console.error('Error loading PDF files:', error);
       this.setState({ errorMessage: 'Error loading PDF files. Please check the library title and permissions.' });
@@ -1017,7 +1005,6 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
           isOpen={showAutoClassifyModal}
           onDismiss={this.handleAutoClassifyDismiss}
           selectedPdfFile={selectedAutoClassifyFile}
-          documentTypes={this.state.documentTypes}
           entityOptions={this.state.entityOptions}
           sourceLibraryTitle={this.props.sourceLibraryTitle}
           destinationLibraryTitle={this.props.destinationLibraryTitle}

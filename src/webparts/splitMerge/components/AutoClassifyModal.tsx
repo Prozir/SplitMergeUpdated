@@ -33,7 +33,6 @@ interface IAutoClassifyModalProps {
   isOpen: boolean;
   onDismiss: () => void;
   selectedPdfFile: IPdfSelection | null;
-  documentTypes: IDropdownOption[];
   entityOptions: IDropdownOption[];
   sourceLibraryTitle: string;
   destinationLibraryTitle: string;
@@ -46,7 +45,6 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   isOpen,
   onDismiss,
   selectedPdfFile,
-  documentTypes,
   entityOptions,
   sourceLibraryTitle,
   destinationLibraryTitle,
@@ -63,7 +61,6 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   const [classificationResults, setClassificationResults] = useState<IClassificationResult[]>([]);
   const [selectedDetectedDocumentType, setSelectedDetectedDocumentType] = useState('');
   const [newContractNumber, setNewContractNumber] = useState('');
-  const [newDocumentType, setNewDocumentType] = useState('');
   const [selectedEntityKey, setSelectedEntityKey] = useState('');
   const [selectedEntitySiteUrl, setSelectedEntitySiteUrl] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -105,7 +102,6 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     setSelectedDetectedDocumentType('');
     
     setNewContractNumber('');
-    setNewDocumentType('');
     setSelectedEntityKey('');
     setSelectedEntitySiteUrl('');
     setUploading(false);
@@ -212,16 +208,11 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
     if (!result) {
       setSelectedDetectedDocumentType('');
-      setPages(prev => prev.map(page => ({ ...page, selected: false })));
       setCurrentPageNumber(1);
       return;
     }
 
     setSelectedDetectedDocumentType(selectedKey);
-    setPages(prev => prev.map(page => ({
-      ...page,
-      selected: result!.pageNumbers.indexOf(page.sourcePageNumber) !== -1
-    })));
     
     // Navigate to the first page of the selected document type
     if (result.pageNumbers.length > 0) {
@@ -287,11 +278,18 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
       }
 
       const firstKey = results[0].key;
+      const detectedPageNumbers = new Set<number>();
+      for (let i = 0; i < results.length; i++) {
+        for (let j = 0; j < results[i].pageNumbers.length; j++) {
+          detectedPageNumbers.add(results[i].pageNumbers[j]);
+        }
+      }
+
       setClassificationResults(results);
       setSelectedDetectedDocumentType(firstKey);
       setPages(prev => prev.map(page => ({
         ...page,
-        selected: firstKey !== '' && results[0].pageNumbers.indexOf(page.sourcePageNumber) !== -1
+        selected: detectedPageNumbers.has(page.sourcePageNumber)
       })));
     } catch (error) {
       console.error('Classification error:', error);
@@ -375,6 +373,17 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     }
   };
 
+  const sanitizeFileNamePart = (value: string): string => {
+    const cleaned = value
+      .trim()
+      .replace(/[\\/:*?"<>|]+/g, '-')
+      .replace(/\s+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^-+|-+$/g, '');
+
+    return cleaned || 'Unknown';
+  };
+
   const getRepositoryFolderUrl = async (siteUrl: string, repositoryName: string, documentSetName: string): Promise<{ siteApiBase: string; folderUrl: string } | null> => {
     const serverRelativeSiteUrl = getServerRelativeUrl(siteUrl).replace(/\/$/, '');
     const siteApiBase = getAbsoluteSiteUrl(siteUrl);
@@ -419,9 +428,10 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
   const handleCollateAndUpload = async () => {
     const selectedPages = pages.filter(p => p.selected);
+    const contractNumber = newContractNumber.trim();
 
-    if (selectedPages.length === 0 || !newContractNumber || !newDocumentType || !selectedEntityKey) {
-      alert('Please select pages and enter contract number, document type, and entity.');
+    if (selectedPages.length === 0 || !contractNumber || !selectedEntityKey) {
+      alert('Please select pages and enter contract number and entity.');
       return;
     }
 
@@ -445,9 +455,9 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
       return;
     }
 
-    const repositoryInfo = await getRepositoryFolderUrl(selectedEntitySiteUrl, destinationDocumentRepositoryTitle, newContractNumber);
+    const repositoryInfo = await getRepositoryFolderUrl(selectedEntitySiteUrl, destinationDocumentRepositoryTitle, contractNumber);
     if (!repositoryInfo) {
-      alert(`Contract Number '${newContractNumber}' was not found in the selected entity repository '${destinationDocumentRepositoryTitle}'.`);
+      alert(`Contract Number '${contractNumber}' was not found in the selected entity repository '${destinationDocumentRepositoryTitle}'.`);
       return;
     }
 
@@ -455,15 +465,13 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
     try {
       const sourcePdfMap: { [fileRef: string]: PDFDocument } = {};
-      const uniqueSourceFiles = selectedPages.reduce<{ [fileRef: string]: string }>((acc, pageInfo) => {
+      const uniqueSourceFiles = pages.reduce<{ [fileRef: string]: string }>((acc, pageInfo) => {
         acc[pageInfo.sourceFileRef] = pageInfo.sourceFileName;
         return acc;
       }, {});
 
-      const newPdf = await PDFDocument.create();
-
-      for (let i = 0; i < selectedPages.length; i++) {
-        const pageInfo = selectedPages[i];
+      for (let i = 0; i < pages.length; i++) {
+        const pageInfo = pages[i];
         if (!sourcePdfMap[pageInfo.sourceFileRef]) {
           const response = await context.spHttpClient.get(pageInfo.sourceFileRef, SPHttpClient.configurations.v1);
           if (!response.ok) {
@@ -472,91 +480,132 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
           const arrayBuffer = await response.arrayBuffer();
           sourcePdfMap[pageInfo.sourceFileRef] = await PDFDocument.load(arrayBuffer);
         }
-
-        const originalPdf = sourcePdfMap[pageInfo.sourceFileRef];
-        const [copiedPage] = await newPdf.copyPages(originalPdf, [pageInfo.sourcePageNumber - 1]);
-        newPdf.addPage(copiedPage);
       }
 
-      const pdfBytes = await newPdf.save();
+      const detectedGroups = classificationResults.map(result => {
+        const pageNumbers = new Set<number>(result.pageNumbers);
+        const selectedGroupPages = selectedPages.filter(page => pageNumbers.has(page.sourcePageNumber));
+        return {
+          result,
+          pages: selectedGroupPages
+        };
+      }).filter(group => group.pages.length > 0);
+
+      if (detectedGroups.length === 0) {
+        throw new Error('No selected pages match any detected document type.');
+      }
+
       const timestamp = new Date().toISOString().replace(/[T:.]/g, '-').substring(0, 19);
-      const fileName = `${newContractNumber}_${newDocumentType}_${timestamp}.pdf`;
-      const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${safeODataString(destinationLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
+      const successfulPageIds = new Set<string>();
+      const successfulTypes: string[] = [];
+      const failedTypes: string[] = [];
 
-      const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
-        body: pdfBytes,
-        headers: {
-          'Content-Type': 'application/pdf',
-          'Accept': 'application/json;odata=nometadata'
+      for (let i = 0; i < detectedGroups.length; i++) {
+        const group = detectedGroups[i];
+
+        try {
+          const newPdf = await PDFDocument.create();
+          for (let j = 0; j < group.pages.length; j++) {
+            const pageInfo = group.pages[j];
+            const originalPdf = sourcePdfMap[pageInfo.sourceFileRef];
+            const [copiedPage] = await newPdf.copyPages(originalPdf, [pageInfo.sourcePageNumber - 1]);
+            newPdf.addPage(copiedPage);
+          }
+
+          const pdfBytes = await newPdf.save();
+          const cleanDocType = sanitizeFileNamePart(group.result.text);
+          const cleanContractNumber = sanitizeFileNamePart(contractNumber);
+          const fileName = `${cleanDocType}_${cleanContractNumber}_${timestamp}.pdf`;
+
+          const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${safeODataString(destinationLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
+          const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
+            body: pdfBytes,
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Accept': 'application/json;odata=nometadata'
+            }
+          });
+
+          if (!uploadResponse.ok) {
+            throw new Error(`File upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
+          }
+
+          const uploadResult = await uploadResponse.json();
+          const serverRelativeUrl = uploadResult?.ServerRelativeUrl || uploadResult?.ServerRelativeUrlRaw || '';
+          if (!serverRelativeUrl) {
+            throw new Error('Uploaded file response did not include ServerRelativeUrl. Cannot update metadata.');
+          }
+
+          const fileUrlEncoded = encodeURIComponent(serverRelativeUrl);
+          const metadataUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${fileUrlEncoded}')/ListItemAllFields`;
+
+          const metadataResponse = await context.spHttpClient.post(metadataUrl, SPHttpClient.configurations.v1, {
+            headers: {
+              'Content-Type': 'application/json;odata=nometadata',
+              'Accept': 'application/json;odata=nometadata',
+              'IF-MATCH': '*',
+              'X-HTTP-Method': 'MERGE'
+            },
+            body: JSON.stringify({
+              ContractNo: contractNumber,
+              DocumentType: group.result.text
+            })
+          });
+
+          if (!metadataResponse.ok) {
+            throw new Error(`Metadata update failed: ${metadataResponse.status} ${metadataResponse.statusText}`);
+          }
+
+          const documentRepositoryUploadUrl = `${repositoryInfo.siteApiBase}/_api/web/GetFolderByServerRelativeUrl('${repositoryInfo.folderUrl.replace(/'/g, "''")}')/Files/add(url='${safeODataString(fileName)}',overwrite=true)`;
+          const documentRepositoryUploadResponse = await context.spHttpClient.post(documentRepositoryUploadUrl, SPHttpClient.configurations.v1, {
+            body: pdfBytes,
+            headers: {
+              'Content-Type': 'application/pdf',
+              'Accept': 'application/json;odata=nometadata'
+            }
+          });
+
+          if (!documentRepositoryUploadResponse.ok) {
+            throw new Error(`Document repository upload failed: ${documentRepositoryUploadResponse.status} ${documentRepositoryUploadResponse.statusText}`);
+          }
+
+          const documentRepositoryUploadResult = await documentRepositoryUploadResponse.json();
+          const documentRepositoryServerRelativeUrl = documentRepositoryUploadResult?.ServerRelativeUrl || `${repositoryInfo.folderUrl}/${fileName}`;
+          const repositoryFileUrlEncoded = encodeURIComponent(documentRepositoryServerRelativeUrl);
+          const repositoryMetadataUrl = `${repositoryInfo.siteApiBase}/_api/web/GetFileByServerRelativeUrl('${repositoryFileUrlEncoded}')/ListItemAllFields`;
+
+          const repositoryMetadataResponse = await context.spHttpClient.post(repositoryMetadataUrl, SPHttpClient.configurations.v1, {
+            headers: {
+              'Content-Type': 'application/json;odata=nometadata',
+              'Accept': 'application/json;odata=nometadata',
+              'IF-MATCH': '*',
+              'X-HTTP-Method': 'MERGE'
+            },
+            body: JSON.stringify({
+              DocumentNumber: contractNumber,
+              DocumentType: group.result.text
+            })
+          });
+
+          if (!repositoryMetadataResponse.ok) {
+            throw new Error(`Document repository metadata update failed: ${repositoryMetadataResponse.status} ${repositoryMetadataResponse.statusText}`);
+          }
+
+          await checkInFile(documentRepositoryServerRelativeUrl, repositoryInfo.siteApiBase);
+
+          for (let j = 0; j < group.pages.length; j++) {
+            successfulPageIds.add(group.pages[j].id);
+          }
+          successfulTypes.push(group.result.text);
+        } catch (groupError) {
+          console.error(`Upload failed for detected type ${group.result.text}:`, groupError);
+          failedTypes.push(group.result.text);
         }
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error(`File upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
       }
 
-      const uploadResult = await uploadResponse.json();
-      const serverRelativeUrl = uploadResult?.ServerRelativeUrl || uploadResult?.ServerRelativeUrlRaw || '';
-      if (!serverRelativeUrl) {
-        throw new Error('Uploaded file response did not include ServerRelativeUrl. Cannot update metadata.');
+      if (successfulPageIds.size === 0) {
+        throw new Error('Upload failed for all detected document types.');
       }
-
-      const fileUrlEncoded = encodeURIComponent(serverRelativeUrl);
-      const metadataUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${fileUrlEncoded}')/ListItemAllFields`;
-
-      const metadataResponse = await context.spHttpClient.post(metadataUrl, SPHttpClient.configurations.v1, {
-        headers: {
-          'Content-Type': 'application/json;odata=nometadata',
-          'Accept': 'application/json;odata=nometadata',
-          'IF-MATCH': '*',
-          'X-HTTP-Method': 'MERGE'
-        },
-        body: JSON.stringify({
-          ContractNo: newContractNumber,
-          DocumentType: newDocumentType
-        })
-      });
-
-      if (!metadataResponse.ok) {
-        throw new Error(`Metadata update failed: ${metadataResponse.status} ${metadataResponse.statusText}`);
-      }
-
-      const documentRepositoryUploadUrl = `${repositoryInfo.siteApiBase}/_api/web/GetFolderByServerRelativeUrl('${repositoryInfo.folderUrl.replace(/'/g, "''")}')/Files/add(url='${safeODataString(fileName)}',overwrite=true)`;
-      const documentRepositoryUploadResponse = await context.spHttpClient.post(documentRepositoryUploadUrl, SPHttpClient.configurations.v1, {
-        body: pdfBytes,
-        headers: {
-          'Content-Type': 'application/pdf',
-          'Accept': 'application/json;odata=nometadata'
-        }
-      });
-
-      if (!documentRepositoryUploadResponse.ok) {
-        throw new Error(`Document repository upload failed: ${documentRepositoryUploadResponse.status} ${documentRepositoryUploadResponse.statusText}`);
-      }
-
-      const documentRepositoryUploadResult = await documentRepositoryUploadResponse.json();
-      const documentRepositoryServerRelativeUrl = documentRepositoryUploadResult?.ServerRelativeUrl || `${repositoryInfo.folderUrl}/${fileName}`;
-      const repositoryFileUrlEncoded = encodeURIComponent(documentRepositoryServerRelativeUrl);
-      const repositoryMetadataUrl = `${repositoryInfo.siteApiBase}/_api/web/GetFileByServerRelativeUrl('${repositoryFileUrlEncoded}')/ListItemAllFields`;
-
-      const repositoryMetadataResponse = await context.spHttpClient.post(repositoryMetadataUrl, SPHttpClient.configurations.v1, {
-        headers: {
-          'Content-Type': 'application/json;odata=nometadata',
-          'Accept': 'application/json;odata=nometadata',
-          'IF-MATCH': '*',
-          'X-HTTP-Method': 'MERGE'
-        },
-        body: JSON.stringify({
-          DocumentNumber: newContractNumber,
-          DocumentType: newDocumentType
-        })
-      });
-
-      if (!repositoryMetadataResponse.ok) {
-        throw new Error(`Document repository metadata update failed: ${repositoryMetadataResponse.status} ${repositoryMetadataResponse.statusText}`);
-      }
-
-      await checkInFile(documentRepositoryServerRelativeUrl, repositoryInfo.siteApiBase);
 
       const currentUserId = context.pageContext.legacyPageContext?.userId;
       if (!currentUserId) {
@@ -568,8 +617,8 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
       for (let i = 0; i < sourceFileRefs.length; i++) {
         const sourceFileRef = sourceFileRefs[i];
-        const filePages = selectedPages.filter(p => p.sourceFileRef === sourceFileRef);
-        const remainingPages = filePages.filter(p => !p.selected);
+        const filePages = pages.filter(p => p.sourceFileRef === sourceFileRef);
+        const remainingPages = filePages.filter(p => !successfulPageIds.has(p.id));
 
         if (remainingPages.length === 0) {
           const deleteUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(sourceFileRef)}')`;
@@ -625,7 +674,8 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
             'X-HTTP-Method': 'MERGE'
           },
           body: JSON.stringify({
-            AssignedToId: currentUserId
+            AssignedToId: currentUserId,
+            AzureResponse: ''
           })
         });
 
@@ -634,7 +684,11 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
         }
       }
 
-      alert('PDF collated and uploaded successfully.');
+      const summaryMessage = failedTypes.length === 0
+        ? `Uploaded ${successfulTypes.length} detected document type file(s) successfully.`
+        : `Uploaded ${successfulTypes.length} detected document type file(s). Failed types: ${failedTypes.join(', ')}.`;
+
+      alert(summaryMessage);
       await onUploadSuccess();
       handleDismiss();
     } catch (error) {
@@ -750,15 +804,6 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
                 <div className={styles.formSection}>
                   <TextField label="Contract Number" value={newContractNumber} onChange={(ev, value) => setNewContractNumber(value || '')} required />
                   <Dropdown
-                    label="Document Type"
-                    options={documentTypes}
-                    selectedKey={newDocumentType || undefined}
-                    onChange={(ev, option) => setNewDocumentType(option?.key as string || '')}
-                    required
-                    disabled={documentTypes.length === 0}
-                    placeholder={documentTypes.length === 0 ? 'No document types available' : 'Select a document type'}
-                  />
-                  <Dropdown
                     label="Entity"
                     options={entityOptions}
                     selectedKey={selectedEntityKey || undefined}
@@ -773,7 +818,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
                   <PrimaryButton
                     text="Merge and Upload"
                     onClick={handleCollateAndUpload}
-                    disabled={uploading || !newContractNumber || !newDocumentType || !selectedEntityKey || selectedDocPages.filter(page => page.selected).length === 0}
+                    disabled={uploading || !newContractNumber.trim() || !selectedEntityKey || pages.filter(page => page.selected).length === 0}
                   />
                   {uploading && <Spinner size={SpinnerSize.small} label="Uploading..." />}
                 </div>
