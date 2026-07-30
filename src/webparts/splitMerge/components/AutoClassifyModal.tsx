@@ -1,46 +1,14 @@
 import * as React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { SPHttpClient } from '@microsoft/sp-http';
-import { WebPartContext } from '@microsoft/sp-webpart-base';
-import { PrimaryButton, TextField, Checkbox, Label, Spinner, SpinnerSize, Modal, IconButton, Dropdown, IDropdownOption } from '@fluentui/react';
+import { PrimaryButton, TextField, Checkbox, Label, Spinner, SpinnerSize, Modal, IconButton, Dropdown } from '@fluentui/react';
 import * as pdfjsLib from 'pdfjs-dist';
 import { PDFDocument } from 'pdf-lib';
 import styles from './SplitMerge.module.scss';
+import { checkInFile, getRepositoryFolderUrl, getServerRelativeUrl, parseClassificationResults, sanitizeFileNamePart, safeODataString } from './splitMergeHelpers';
+import { IAutoClassifyModalProps, IClassificationResult, IPdfSelection, IPageInfo } from './splitMergeTypes';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/build/pdf.worker.min.js');
-
-interface IPageInfo {
-  id: string;
-  sourceFileRef: string;
-  sourceFileName: string;
-  sourcePageNumber: number;
-  selected: boolean;
-}
-
-interface IPdfSelection {
-  fileRef: string;
-  fileName: string;
-}
-
-interface IClassificationResult {
-  key: string;
-  text: string;
-  confidence: number;
-  pageNumbers: number[];
-}
-
-interface IAutoClassifyModalProps {
-  isOpen: boolean;
-  onDismiss: () => void;
-  selectedPdfFile: IPdfSelection | null;
-  entityOptions: IDropdownOption[];
-  sourceLibraryTitle: string;
-  destinationLibraryTitle: string;
-  destinationDocumentRepositoryTitle: string;
-  context: WebPartContext;
-  isBusy?: boolean;
-  onUploadSuccess: () => Promise<void>;
-}
 
 const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   isOpen,
@@ -95,6 +63,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     }
   }, [isOpen, pages, currentPageNumber]);
 
+  // Reset the modal before a new run.
   const resetState = () => {
     setPages([]);
     setCurrentPageNumber(1);
@@ -112,6 +81,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     setPdfDocument(null);
   };
 
+  // Load the PDF and build the page list.
   const loadPdf = async (selectedFile: IPdfSelection): Promise<ArrayBuffer | null> => {
     setLoading(true);
     setErrorMessage('');
@@ -119,6 +89,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     setPdfDocument(null);
 
     try {
+      // Fetch the PDF file from SharePoint.
       const response = await context.spHttpClient.get(selectedFile.fileRef, SPHttpClient.configurations.v1);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -136,6 +107,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
         throw new Error('File is not a valid PDF');
       }
 
+      // Confirm the file is a real PDF before continuing.
       const pdf = await pdfjsLib.getDocument({ data: pdfBytesForPdfJs }).promise;
       setPdfDocument(pdf);
 
@@ -163,6 +135,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     }
   };
 
+  // Show the selected page in the preview.
   const renderPdfPage = async (pageNumber: number) => {
     if (!previewCanvasRef.current || !pdfDocument) {
       return;
@@ -173,6 +146,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
       return;
     }
 
+    // Render the requested page on the preview canvas.
     const page = await pdfDocument.getPage(pageInfo.sourcePageNumber);
     const scale = 1.5;
     const viewport = page.getViewport({ scale });
@@ -189,6 +163,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     await page.render({ canvasContext: context2d, viewport }).promise;
   };
 
+  // Move to the next or previous page.
   const handlePageNavigation = (pageNumber: number) => {
     if (pageNumber < 1 || pageNumber > pages.length) {
       return;
@@ -196,10 +171,12 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     setCurrentPageNumber(pageNumber);
   };
 
+  // Mark a page as selected or not.
   const handlePageSelect = (pageId: string, selected: boolean) => {
     setPages(prev => prev.map(page => page.id === pageId ? { ...page, selected } : page));
   };
 
+  // Switch the selected document type.
   const handleDetectedDocumentTypeChange = (selectedKey: string) => {
     let result: IClassificationResult | undefined;
     for (let i = 0; i < classificationResults.length; i++) {
@@ -233,6 +210,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     }
   };
 
+  // Read the stored result and mark detected pages.
   const classifySelectedDocument = async (bytes?: ArrayBuffer | null) => {
     if (!selectedPdfFile) {
       setClassificationError('No file selected for classification.');
@@ -248,6 +226,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     setSelectedDetectedDocumentType('');
 
     try {
+      // Read the stored Azure response for this file.
       const serverRelative = getServerRelativeUrl(selectedPdfFile.fileRef);
       if (!serverRelative) {
         throw new Error('Unable to determine server-relative URL for the selected file.');
@@ -275,6 +254,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
         throw new Error('AzureResponse contains invalid JSON.');
       }
 
+      // Parse the classification result into document groups.
       const results = parseClassificationResults(resultJson);
       if (results.length === 0) {
         throw new Error('No document types were detected by the stored Document Intelligence response.');
@@ -305,130 +285,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
 
   
 
-  const parseClassificationResults = (classificationJson: any): IClassificationResult[] => {
-    const rawDocuments = classificationJson.documents || classificationJson.analyzeResult?.documents || classificationJson.documentResults || [];
-    const results: IClassificationResult[] = [];
-
-    if (!Array.isArray(rawDocuments)) {
-      return results;
-    }
-
-    for (let i = 0; i < rawDocuments.length; i++) {
-      const doc = rawDocuments[i];
-      const key = doc.docType || doc.documentType || doc.type || doc['documentType'] || doc.name || 'Unknown';
-      const text = String(key);
-      const confidence = typeof doc.confidence === 'number' ? doc.confidence : (typeof doc.confidence === 'string' ? parseFloat(doc.confidence) : 0);
-      let pageNumbers: number[] = [];
-
-      if (Array.isArray(doc.boundingRegions)) {
-        for (let j = 0; j < doc.boundingRegions.length; j++) {
-          const region = doc.boundingRegions[j];
-          const pageValue = Number(region.pageNumber);
-          if (!isNaN(pageValue)) {
-            pageNumbers.push(pageValue);
-          }
-        }
-      }
-
-      if (pageNumbers.length === 0 && typeof doc.pageNumber === 'number') {
-        pageNumbers = [doc.pageNumber];
-      }
-
-      const uniquePageNumbers: number[] = [];
-      for (let j = 0; j < pageNumbers.length; j++) {
-        const pageNumber = pageNumbers[j];
-        if (uniquePageNumbers.indexOf(pageNumber) === -1) {
-          uniquePageNumbers.push(pageNumber);
-        }
-      }
-      uniquePageNumbers.sort((a, b) => a - b);
-      pageNumbers = uniquePageNumbers;
-
-      results.push({ key: text, text, confidence, pageNumbers });
-    }
-
-    return results;
-  };
-
-  const safeODataString = (value: string) => value.replace(/'/g, "''");
-
-  const getServerRelativeUrl = (url: string) => {
-    if (!url) {
-      return url;
-    }
-    try {
-      const parsed = new URL(url, window.location.origin);
-      return parsed.pathname.replace(/\/$/, '');
-    } catch {
-      return url.replace(/\/$/, '');
-    }
-  };
-
-  const getAbsoluteSiteUrl = (url: string) => {
-    if (!url) {
-      return '';
-    }
-    try {
-      const parsed = new URL(url, window.location.origin);
-      return `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/$/, '');
-    } catch {
-      return url.replace(/\/$/, '');
-    }
-  };
-
-  const sanitizeFileNamePart = (value: string): string => {
-    const cleaned = value
-      .trim()
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .replace(/\s+/g, '_')
-      .replace(/_+/g, '_')
-      .replace(/^-+|-+$/g, '');
-
-    return cleaned || 'Unknown';
-  };
-
-  const getRepositoryFolderUrl = async (siteUrl: string, repositoryName: string, documentSetName: string): Promise<{ siteApiBase: string; folderUrl: string } | null> => {
-    const serverRelativeSiteUrl = getServerRelativeUrl(siteUrl).replace(/\/$/, '');
-    const siteApiBase = getAbsoluteSiteUrl(siteUrl);
-    const safeRepositoryName = repositoryName.trim().replace(/^\/+|\/+$/g, '');
-    const safeDocumentSetName = documentSetName.trim();
-
-    if (!siteApiBase || !serverRelativeSiteUrl || !safeRepositoryName || !safeDocumentSetName) {
-      console.error('Invalid repository target values', { siteUrl, siteApiBase, serverRelativeSiteUrl, repositoryName, documentSetName });
-      return null;
-    }
-
-    const folderUrl = `${serverRelativeSiteUrl}/${safeRepositoryName}/${safeDocumentSetName}`;
-    const safeFolderUrl = folderUrl.replace(/'/g, "''");
-
-    const response = await context.spHttpClient.get(
-      `${siteApiBase}/_api/web/GetFolderByServerRelativeUrl('${safeFolderUrl}')`,
-      SPHttpClient.configurations.v1
-    );
-
-    if (!response.ok) {
-      console.warn('Target folder not found', { siteApiBase, folderUrl, status: response.status, statusText: response.statusText });
-      return null;
-    }
-
-    return { siteApiBase, folderUrl };
-  };
-
-  const checkInFile = async (serverRelativeUrl: string, siteApiBase: string): Promise<void> => {
-    const fileUrlEncoded = encodeURIComponent(serverRelativeUrl);
-    const checkInUrl = `${siteApiBase}/_api/web/GetFileByServerRelativeUrl('${fileUrlEncoded}')/CheckIn(comment='Uploaded by AutoClassify',checkintype=0)`;
-
-    const response = await context.spHttpClient.post(checkInUrl, SPHttpClient.configurations.v1, {
-      headers: {
-        'Accept': 'application/json;odata=nometadata'
-      }
-    });
-
-    if (!response.ok) {
-      throw new Error(`File check-in failed: ${response.status} ${response.statusText}`);
-    }
-  };
-
+  // Create merged files and upload them.
   const handleCollateAndUpload = async () => {
     const selectedPages = pages.filter(p => p.selected);
     const contractNumber = newContractNumber.trim();
@@ -458,7 +315,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
       return;
     }
 
-    const repositoryInfo = await getRepositoryFolderUrl(selectedEntitySiteUrl, destinationDocumentRepositoryTitle, contractNumber);
+    const repositoryInfo = await getRepositoryFolderUrl(context, selectedEntitySiteUrl, destinationDocumentRepositoryTitle, contractNumber);
     if (!repositoryInfo) {
       alert(`Contract Number '${contractNumber}' was not found in the selected entity repository '${destinationDocumentRepositoryTitle}'.`);
       return;
@@ -507,6 +364,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
         const group = detectedGroups[i];
 
         try {
+          // Build a new PDF from the selected pages.
           const newPdf = await PDFDocument.create();
           for (let j = 0; j < group.pages.length; j++) {
             const pageInfo = group.pages[j];
@@ -520,6 +378,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
           const cleanContractNumber = sanitizeFileNamePart(contractNumber);
           const fileName = `${cleanDocType}_${cleanContractNumber}_${timestamp}.pdf`;
 
+          // Upload the merged file to the destination library.
           const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${safeODataString(destinationLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
           const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
             body: pdfBytes,
@@ -594,7 +453,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
             throw new Error(`Document repository metadata update failed: ${repositoryMetadataResponse.status} ${repositoryMetadataResponse.statusText}`);
           }
 
-          await checkInFile(documentRepositoryServerRelativeUrl, repositoryInfo.siteApiBase);
+          await checkInFile(context, documentRepositoryServerRelativeUrl, repositoryInfo.siteApiBase, 'Uploaded by AutoClassify');
 
           for (let j = 0; j < group.pages.length; j++) {
             successfulPageIds.add(group.pages[j].id);
@@ -624,6 +483,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
         const remainingPages = filePages.filter(p => !successfulPageIds.has(p.id));
 
         if (remainingPages.length === 0) {
+          // Remove the source file when nothing is left to keep.
           const deleteUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(sourceFileRef)}')`;
           const deleteResponse = await context.spHttpClient.post(deleteUrl, SPHttpClient.configurations.v1, {
             headers: {
@@ -701,6 +561,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
     }
   };
 
+  // Close the modal and reset the state.
   const handleDismiss = () => {
     resetState();
     onDismiss();
