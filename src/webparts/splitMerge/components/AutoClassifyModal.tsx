@@ -38,6 +38,7 @@ interface IAutoClassifyModalProps {
   destinationLibraryTitle: string;
   destinationDocumentRepositoryTitle: string;
   context: WebPartContext;
+  isBusy?: boolean;
   onUploadSuccess: () => Promise<void>;
 }
 
@@ -50,6 +51,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   destinationLibraryTitle,
   destinationDocumentRepositoryTitle,
   context,
+  isBusy = false,
   onUploadSuccess
 }) => {
   const [pages, setPages] = useState<IPageInfo[]>([]);
@@ -66,6 +68,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   const [uploading, setUploading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [pdfDocument, setPdfDocument] = useState<any>(null);
+  const isModalBusy = isBusy || loading || classificationLoading || uploading;
   
   const previewCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -720,19 +723,19 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
   return (
     <Modal
       isOpen={isOpen}
-      onDismiss={handleDismiss}
-      isBlocking={false}
+      onDismiss={isModalBusy ? undefined : handleDismiss}
+      isBlocking={isModalBusy}
       containerClassName={styles.modalContainer}
     >
       <div className={styles.modalHeader}>
         <h3>Auto Classify Document: {selectedPdfFile?.fileName || 'selected PDF'}</h3>
-        <IconButton iconProps={{ iconName: 'Cancel' }} onClick={handleDismiss} title="Close" />
+        <IconButton iconProps={{ iconName: 'Cancel' }} onClick={handleDismiss} title="Close" disabled={isModalBusy} />
       </div>
       <div className={styles.modalBody}>
         <div className={styles.modalContent}>
           <div className={styles.previewPanel}>
             <div className={styles.previewControls}>
-              <PrimaryButton text="Previous" onClick={() => handlePageNavigation(currentPageNumber - 1)} disabled={currentPageNumber <= 1 || loading} />
+              <PrimaryButton text="Previous" onClick={() => handlePageNavigation(currentPageNumber - 1)} disabled={currentPageNumber <= 1 || isModalBusy} />
               <Label className={styles.currentPageLabel}>
                 Page {currentPageNumber} of {pages.length}
                 {pages.length > 0 && (() => {
@@ -740,7 +743,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
                   return currentPage ? ` (${currentPage.sourceFileName} page ${currentPage.sourcePageNumber})` : '';
                 })()}
               </Label>
-              <PrimaryButton text="Next" onClick={() => handlePageNavigation(currentPageNumber + 1)} disabled={currentPageNumber >= pages.length || loading} />
+              <PrimaryButton text="Next" onClick={() => handlePageNavigation(currentPageNumber + 1)} disabled={currentPageNumber >= pages.length || isModalBusy} />
             </div>
             <div className={styles.previewCanvasWrapper}>
               <canvas ref={previewCanvasRef} className={styles.previewCanvas} />
@@ -762,6 +765,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
                   selectedKey={selectedDetectedDocumentType || undefined}
                   onChange={(ev, option) => handleDetectedDocumentTypeChange(option?.key as string)}
                   placeholder="Select a detected document type"
+                  disabled={isModalBusy}
                 />
                 {selectedDocumentTypeResult && (
                   <div style={{ padding: 12, border: '1px solid #e1e1e1', borderRadius: 4, background: '#fff' }}>
@@ -780,6 +784,7 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
                       <Checkbox
                         label={`Page ${page.sourcePageNumber}`}
                         checked={page.selected}
+                        disabled={isModalBusy}
                         onChange={(ev, checked) => handlePageSelect(page.id, checked || false)}
                       />
                       <PrimaryButton
@@ -796,13 +801,14 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
                             handlePageNavigation(pageIndex + 1);
                           }
                         }}
+                        disabled={isModalBusy}
                       />
                     </div>
                   ))}
                 </div>
 
                 <div className={styles.formSection}>
-                  <TextField label="Contract Number" value={newContractNumber} onChange={(ev, value) => setNewContractNumber(value || '')} required />
+                  <TextField label="Contract Number" value={newContractNumber} onChange={(ev, value) => setNewContractNumber(value || '')} required disabled={isModalBusy} />
                   <Dropdown
                     label="Entity"
                     options={entityOptions}
@@ -812,13 +818,13 @@ const AutoClassifyModal: React.FC<IAutoClassifyModalProps> = ({
                       setSelectedEntitySiteUrl(option?.data as string || '');
                     }}
                     required
-                    disabled={entityOptions.length === 0}
+                    disabled={entityOptions.length === 0 || isModalBusy}
                     placeholder={entityOptions.length === 0 ? 'No entities available' : 'Select an entity'}
                   />
                   <PrimaryButton
                     text="Merge and Upload"
                     onClick={handleCollateAndUpload}
-                    disabled={uploading || !newContractNumber.trim() || !selectedEntityKey || pages.filter(page => page.selected).length === 0}
+                    disabled={uploading || isBusy || !newContractNumber.trim() || !selectedEntityKey || pages.filter(page => page.selected).length === 0}
                   />
                   {uploading && <Spinner size={SpinnerSize.small} label="Uploading..." />}
                 </div>

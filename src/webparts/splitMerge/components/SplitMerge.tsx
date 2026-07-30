@@ -763,6 +763,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
 
   public render(): React.ReactElement<ISplitMergeProps> {
     const { pdfFiles, pages, loading, newContractNumber, newDocumentType, uploading, uploadingSource, errorMessage, entityOptions, loadingEntities, selectedEntityKey, selectedPdfFiles, showAutoClassifyModal, selectedAutoClassifyFile } = this.state;
+    const isMergeUploading = uploading;
 
     const allPagesSelected = pages.length > 0 && pages.every(p => p.selected);
     const somePagesSelected = pages.some(p => p.selected) && !allPagesSelected;
@@ -858,17 +859,17 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
             <PrimaryButton
               text="Upload New PDF"
               onClick={this.handleUploadButtonClick}
-              disabled={!this.props.sourceLibraryTitle || uploadingSource}
+              disabled={!this.props.sourceLibraryTitle || uploadingSource || isMergeUploading}
             />
             <PrimaryButton
               text="Manual Split & Classify"
               onClick={this.handleOpenSelectedClick}
-              disabled={selectedPdfFiles.length === 0 || loading}
+              disabled={selectedPdfFiles.length === 0 || loading || isMergeUploading}
             />
             <PrimaryButton
               text="Auto Split & Classify"
               onClick={this.handleOpenClassifyClick}
-              disabled={selectedPdfFiles.length !== 1 || loading || this.state.disableAutoClassify}
+              disabled={selectedPdfFiles.length !== 1 || loading || this.state.disableAutoClassify || isMergeUploading}
             />
             <input
               ref={this.fileInputRef}
@@ -888,7 +889,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                 items={items}
                 columns={columns}
                 selection={this.selection}
-                selectionMode={SelectionMode.multiple}
+                selectionMode={isMergeUploading ? SelectionMode.none : SelectionMode.multiple}
                 setKey="pdfFiles"
               />
             )}
@@ -899,7 +900,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
         <Modal
           isOpen={this.state.showModal}
           onDismiss={this.handleModalClose}
-          isBlocking={false}
+          isBlocking={isMergeUploading}
           containerClassName={styles.modalContainer}
         >
           <div className={styles.modalHeader}>
@@ -908,6 +909,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
               iconProps={{ iconName: 'Cancel' }}
               onClick={this.handleModalClose}
               title="Close"
+              disabled={isMergeUploading}
             />
           </div>
           <div className={styles.modalBody}>
@@ -918,7 +920,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                     <PrimaryButton
                       text="Previous"
                       onClick={() => this.handlePageNavigation(this.state.currentPageNumber - 1)}
-                      disabled={this.state.currentPageNumber <= 1}
+                      disabled={this.state.currentPageNumber <= 1 || isMergeUploading}
                     />
                     <Label className={styles.currentPageLabel}>
                         Page {this.state.currentPageNumber} of {pages.length}
@@ -930,7 +932,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                     <PrimaryButton
                       text="Next"
                       onClick={() => this.handlePageNavigation(this.state.currentPageNumber + 1)}
-                      disabled={this.state.currentPageNumber >= pages.length}
+                      disabled={this.state.currentPageNumber >= pages.length || isMergeUploading}
                     />
                   </div>
                   <div className={styles.previewCanvasWrapper}>
@@ -943,6 +945,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                     label="Select All"
                     checked={allPagesSelected}
                     indeterminate={somePagesSelected}
+                    disabled={isMergeUploading}
                     onChange={(ev, checked) => this.setState(prevState => ({
                       pages: prevState.pages.map(page => ({ ...page, selected: checked || false }))
                     }))}
@@ -953,12 +956,13 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                         <Checkbox
                           label={`Page ${page.sourcePageNumber} from ${page.sourceFileName}`}
                           checked={page.selected}
+                          disabled={isMergeUploading}
                           onChange={(ev, checked) => this.handlePageSelect(page.id, checked || false)}
                         />
                         <PrimaryButton
                           text="Preview"
                           onClick={() => this.handlePageNavigation(index + 1)}
-                          disabled={this.state.currentPageNumber === index + 1}
+                          disabled={this.state.currentPageNumber === index + 1 || isMergeUploading}
                         />
                       </div>
                     ))}
@@ -969,6 +973,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                       value={newContractNumber}
                       onChange={(ev, value) => this.setState({ newContractNumber: value || '' })}
                       required
+                      disabled={isMergeUploading}
                     />
                     <Dropdown
                       label="Document Type"
@@ -976,7 +981,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                       selectedKey={newDocumentType || undefined}
                       onChange={(ev, option) => this.setState({ newDocumentType: option?.key as string || '' })}
                       required
-                      disabled={this.state.loadingDocumentTypes || this.state.documentTypes.length === 0}
+                      disabled={this.state.loadingDocumentTypes || this.state.documentTypes.length === 0 || isMergeUploading}
                       placeholder={this.state.loadingDocumentTypes ? "Loading document types..." : "Select a document type"}
                     />
                     <Dropdown
@@ -985,7 +990,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
                       selectedKey={selectedEntityKey || undefined}
                       onChange={(ev, option) => this.setState({ selectedEntityKey: option?.key as string || '', selectedEntitySiteUrl: option?.data as string || '' })}
                       required
-                      disabled={loadingEntities || entityOptions.length === 0}
+                      disabled={loadingEntities || entityOptions.length === 0 || isMergeUploading}
                       placeholder={loadingEntities ? "Loading entities..." : "Select an entity"}
                     />
                     <PrimaryButton
@@ -1010,6 +1015,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
           destinationLibraryTitle={this.props.destinationLibraryTitle}
           destinationDocumentRepositoryTitle={this.props.destinationDocumentRepositoryTitle}
           context={this.props.context}
+          isBusy={isMergeUploading}
           onUploadSuccess={async () => {
             await this.loadPdfFiles();
           }}
