@@ -670,7 +670,9 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
             'X-HTTP-Method': 'MERGE'
           },
           body: JSON.stringify({
-            AssignedToId: currentUserId
+            AssignedToId: currentUserId,
+            AzureResponse: '',
+            AutoClassifyStatus: 'File processed manually'
           })
         });
 
