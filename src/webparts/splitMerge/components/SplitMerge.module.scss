@@ -18,6 +18,19 @@
   overflow:hidden;
 }
 
+.uploadModalContainer {
+  width: min(90vw, 520px);
+  max-width: 520px;
+  height: auto;
+  max-height: 90vh;
+  overflow: auto;
+}
+
+.uploadModalBody {
+  height: auto;
+  overflow: visible;
+}
+
 .modalHeader {
   display: flex;
   justify-content: space-between;

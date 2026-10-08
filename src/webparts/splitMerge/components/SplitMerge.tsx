@@ -23,6 +23,10 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   newDocumentType: string;
   uploading: boolean;
   uploadingSource: boolean;
+  uploadFile: File | null;
+  uploadContractNo: string;
+  showUploadModal: boolean;
+  uploadErrorMessage: string;
   errorMessage: string;
   showModal: boolean;
   documentTypes: IDropdownOption[];
@@ -34,6 +38,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   showAutoClassifyModal: boolean;
   selectedAutoClassifyFile: IPdfSelection | null;
   disableAutoClassify: boolean;
+  columnWidths: { [key: string]: number };
 }> {
   private pdfDocuments: { [fileRef: string]: any } = {};
   private selection: Selection;
@@ -55,6 +60,10 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       newDocumentType: '',
       uploading: false,
       uploadingSource: false,
+      uploadFile: null,
+      uploadContractNo: '',
+      showUploadModal: false,
+      uploadErrorMessage: '',
       errorMessage: '',
       showModal: false,
       showAutoClassifyModal: false,
@@ -66,7 +75,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       selectedEntityKey: '',
       selectedEntitySiteUrl: ''
       ,
-      disableAutoClassify: false
+      disableAutoClassify: false,
+      columnWidths: {}
     };
   }
 
@@ -119,7 +129,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     try {
       // Load the PDF files from the source library.
       const files: any[] = [];
-      let nextUrl: string | undefined = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${safeODataString(sourceLibraryTitle)}')/items?$filter=substringof('.pdf',FileLeafRef)&$select=FileLeafRef,FileRef,Created,Modified,Author/Title,AssignedTo/Title,AssignedTo/EMail,AzureResponse,AutoClassifyStatus&$expand=Author,AssignedTo&$orderby=Created desc&$top=5000`;
+      let nextUrl: string | undefined = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${safeODataString(sourceLibraryTitle)}')/items?$filter=substringof('.pdf',FileLeafRef)&$select=FileLeafRef,FileRef,Created,Modified,Author/Title,AssignedTo/Title,AssignedTo/EMail,AzureResponse,AutoClassifyStatus,ContractNo&$expand=Author,AssignedTo&$orderby=Created desc&$top=5000`;
 
       while (nextUrl) {
         const response = await context.spHttpClient.get(nextUrl, SPHttpClient.configurations.v1);
@@ -144,14 +154,27 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   // Track which PDF files are selected.
   private handleSelectionChanged = () => {
     const selectedItems = this.selection.getSelection() as any[];
-    const selectedPdfFiles = selectedItems.map(item => ({ fileRef: item.fileRef, fileName: item.fileName }));
+    const selectedPdfFiles = selectedItems.map(item => ({ fileRef: item.fileRef, fileName: item.fileName, contractNo: item.contractNo || '' }));
     const disable = !(selectedItems.length === 1 && selectedItems[0]?.azureResponse && String(selectedItems[0].azureResponse).trim() !== '');
     this.setState({ selectedPdfFiles, disableAutoClassify: disable });
   };
 
+  private handleColumnResize = (column?: IColumn, newWidth?: number) => {
+    if (!column || typeof newWidth !== 'number') {
+      return;
+    }
+
+    this.setState(prevState => ({
+      columnWidths: {
+        ...prevState.columnWidths,
+        [column.key]: newWidth
+      }
+    }));
+  };
+
   // Open one PDF file for viewing.
-  private async loadPdf(fileUrl: string, fileName: string) {
-    return this.loadSelectedPdfs([{ fileRef: fileUrl, fileName }]);
+  private async loadPdf(fileUrl: string, fileName: string, contractNo: string) {
+    return this.loadSelectedPdfs([{ fileRef: fileUrl, fileName, contractNo }]);
   }
 
   // Open the selected PDFs and prepare their pages.
@@ -200,6 +223,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
         loading: false,
         selectedPdfFiles: selectedFiles,
         selectedPdfName: selectedFiles.map(f => f.fileName).join(', '),
+        newContractNumber: selectedFiles[0]?.contractNo || '',
         currentPageNumber: 1,
         showModal: true
       });
@@ -314,8 +338,8 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
   };
 
   // Open a PDF when the user clicks its name.
-  private handlePdfSelect = (fileRef: string, fileName: string) => {
-    this.loadPdf(fileRef, fileName);
+  private handlePdfSelect = (fileRef: string, fileName: string, contractNo: string) => {
+    this.loadPdf(fileRef, fileName, contractNo);
   };
 
   // Open the selected PDFs for review.
@@ -357,35 +381,61 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
 
   // Open the file picker for uploading a PDF.
   private handleUploadButtonClick = () => {
+    this.setState({ showUploadModal: true, uploadFile: null, uploadContractNo: '', uploadErrorMessage: '' });
+  };
+
+  private handleChooseUploadFile = () => {
     if (this.fileInputRef.current) {
       this.fileInputRef.current.value = '';
       this.fileInputRef.current.click();
     }
   };
 
-  // Upload a file chosen by the user.
-  private handleFileInputChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const { sourceLibraryTitle, context } = this.props;
+  private handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files && event.target.files[0];
 
-    if (!file || !sourceLibraryTitle) {
+    if (!file) {
       return;
     }
 
     if (file.type !== 'application/pdf') {
-      alert('Please select a PDF file.');
+      this.setState({ uploadFile: null, uploadErrorMessage: 'Please select a PDF file.' });
+      event.target.value = '';
       return;
     }
 
-    this.setState({ uploadingSource: true, errorMessage: '' });
+    this.setState({ uploadFile: file, uploadErrorMessage: '' });
+  };
 
+  private handleUploadCancel = () => {
+    if (this.state.uploadingSource) {
+      return;
+    }
+    this.setState({
+      showUploadModal: false,
+      uploadFile: null,
+      uploadContractNo: '',
+      uploadErrorMessage: ''
+    });
+  };
+
+  private handleUploadSubmit = async () => {
+    const { sourceLibraryTitle, context } = this.props;
+    const { uploadFile, uploadContractNo } = this.state;
+    const contractNo = uploadContractNo.trim();
+
+    if (!sourceLibraryTitle || !uploadFile || !contractNo) {
+      this.setState({ uploadErrorMessage: 'Select a PDF file and enter a ContractNo before uploading.' });
+      return;
+    }
+
+    this.setState({ uploadingSource: true, uploadErrorMessage: '' });
     try {
-      // Upload the new PDF into the source library.
-      const fileName = file.name;
+      const fileName = uploadFile.name;
       const uploadUrl = `${context.pageContext.web.absoluteUrl}/_api/web/lists/getbytitle('${safeODataString(sourceLibraryTitle)}')/RootFolder/Files/add(url='${encodeURIComponent(fileName)}',overwrite=true)`;
 
       const uploadResponse = await context.spHttpClient.post(uploadUrl, SPHttpClient.configurations.v1, {
-        body: file,
+        body: uploadFile,
         headers: {
           'Content-Type': 'application/pdf',
           'Accept': 'application/json;odata=nometadata'
@@ -396,11 +446,38 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
         throw new Error(`File upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`);
       }
 
+      const uploadedFile = await uploadResponse.json();
+      const serverRelativeUrl = uploadedFile?.ServerRelativeUrl;
+      if (!serverRelativeUrl || typeof serverRelativeUrl !== 'string') {
+        throw new Error('File uploaded, but SharePoint did not return its server-relative URL for ContractNo update.');
+      }
+
+      const metadataUrl = `${context.pageContext.web.absoluteUrl}/_api/web/GetFileByServerRelativeUrl('${encodeURIComponent(serverRelativeUrl)}')/ListItemAllFields`;
+      const metadataResponse = await context.spHttpClient.post(metadataUrl, SPHttpClient.configurations.v1, {
+        headers: {
+          'Content-Type': 'application/json;odata=nometadata',
+          'Accept': 'application/json;odata=nometadata',
+          'IF-MATCH': '*',
+          'X-HTTP-Method': 'MERGE'
+        },
+        body: JSON.stringify({ ContractNo: contractNo })
+      });
+
+      if (!metadataResponse.ok) {
+        throw new Error(`File uploaded, but ContractNo update failed: ${metadataResponse.status} ${metadataResponse.statusText}`);
+      }
+
       alert(`Uploaded ${fileName} successfully to ${sourceLibraryTitle}.`);
       await this.loadPdfFiles();
+      this.setState({
+        showUploadModal: false,
+        uploadFile: null,
+        uploadContractNo: '',
+        uploadErrorMessage: ''
+      });
     } catch (error) {
       console.error('Error uploading PDF file:', error);
-      this.setState({ errorMessage: 'Error uploading PDF file. Please try again.' });
+      this.setState({ uploadErrorMessage: error instanceof Error ? error.message : 'Error uploading PDF file.' });
     } finally {
       this.setState({ uploadingSource: false });
     }
@@ -711,12 +788,11 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
         name: 'File Name',
         fieldName: 'fileName',
         minWidth: 200,
-        maxWidth: 300,
         onRender: (item) => (
           <Link
             onClick={(event) => {
               event.preventDefault();
-              this.handlePdfSelect(item.fileRef, item.fileName);
+              this.handlePdfSelect(item.fileRef, item.fileName, item.contractNo);
             }}
             disabled={loading}
           >
@@ -725,32 +801,34 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
         )
       },
       {
+        key: 'contractNo',
+        name: 'ContractNo',
+        fieldName: 'contractNo',
+        minWidth: 150
+      },
+      {
         key: 'created',
         name: 'Created',
         fieldName: 'created',
-        minWidth: 150,
-        maxWidth: 200
+        minWidth: 150
       },
       {
         key: 'modified',
         name: 'Modified',
         fieldName: 'modified',
-        minWidth: 150,
-        maxWidth: 200
+        minWidth: 150
       },
       {
         key: 'author',
         name: 'Author',
         fieldName: 'author',
-        minWidth: 100,
-        maxWidth: 150
+        minWidth: 100
       },
       {
         key: 'assignedTo',
         name: 'Assigned To',
         fieldName: 'assignedTo',
-        minWidth: 150,
-        maxWidth: 200
+        minWidth: 150
       }
     ];
 
@@ -760,13 +838,17 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
       name: 'AutoClassifyStatus',
       fieldName: 'autoClassifyStatus',
       minWidth: 150,
-      maxWidth: 200,
       onRender: (item) => renderCell(item, 'autoClassifyStatus')
     });
 
     // Ensure other columns render with grey when AzureResponse is missing
     // Add onRender to created/modified/author/assignedTo columns
     columns.forEach(col => {
+      col.isResizable = true;
+      const width = this.state.columnWidths[col.key];
+      if (width !== undefined) {
+        col.currentWidth = width;
+      }
       if (!col.onRender) {
         col.onRender = (item: any) => renderCell(item, col.fieldName || '');
       }
@@ -775,6 +857,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
     const items = pdfFiles.map(file => ({
       fileName: file.FileLeafRef,
       fileRef: file.FileRef,
+      contractNo: file.ContractNo || '',
       created: new Date(file.Created).toLocaleString(),
       modified: new Date(file.Modified).toLocaleString(),
       author: file.Author?.Title || 'Unknown',
@@ -820,6 +903,7 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
               <DetailsList
                 items={items}
                 columns={columns}
+                onColumnResize={this.handleColumnResize}
                 selection={this.selection}
                 selectionMode={isMergeUploading ? SelectionMode.none : SelectionMode.multiple}
                 setKey="pdfFiles"
@@ -828,6 +912,47 @@ export default class SplitMerge extends React.Component<ISplitMergeProps, {
           </div>
           {loading && <Spinner size={SpinnerSize.medium} label="Loading PDF..." />}
         </div>
+
+        <Modal
+          isOpen={this.state.showUploadModal}
+          onDismiss={this.handleUploadCancel}
+          isBlocking={uploadingSource}
+          containerClassName={styles.uploadModalContainer}
+        >
+          <div className={styles.modalHeader}>
+            <h3>Upload PDF</h3>
+            <IconButton
+              iconProps={{ iconName: 'Cancel' }}
+              onClick={this.handleUploadCancel}
+              title="Close"
+              disabled={uploadingSource}
+            />
+          </div>
+          <div className={`${styles.modalBody} ${styles.uploadModalBody}`}>
+            <div className={styles.formSection}>
+              <PrimaryButton
+                text={this.state.uploadFile ? 'Choose a different PDF' : 'Select PDF'}
+                onClick={this.handleChooseUploadFile}
+                disabled={uploadingSource}
+              />
+              {this.state.uploadFile && <Label>{this.state.uploadFile.name}</Label>}
+              <TextField
+                label="ContractNo"
+                value={this.state.uploadContractNo}
+                onChange={(ev, value) => this.setState({ uploadContractNo: value || '' })}
+                required
+                disabled={uploadingSource}
+              />
+              {this.state.uploadErrorMessage && <div style={{ color: 'red' }}>{this.state.uploadErrorMessage}</div>}
+              <PrimaryButton
+                text="Upload"
+                onClick={this.handleUploadSubmit}
+                disabled={uploadingSource || !this.state.uploadFile || !this.state.uploadContractNo.trim()}
+              />
+              {uploadingSource && <Spinner size={SpinnerSize.small} label="Uploading PDF..." />}
+            </div>
+          </div>
+        </Modal>
 
         <Modal
           isOpen={this.state.showModal}

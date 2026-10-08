@@ -15,6 +15,7 @@ export interface IPageInfo {
 export interface IPdfSelection {
   fileRef: string;
   fileName: string;
+  contractNo: string;
 }
 
 // Stores one detected document type and its page numbers.
